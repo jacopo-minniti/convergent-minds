@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# This script sets up the environment for the computational alignment project.
+# This script sets up the environment for the convergent-minds project.
 # It creates a virtual environment, installs dependencies, and downloads necessary data.
 
 set -e
 
-echo "--- Setting up your environment for Computational Alignment ---"
+echo "--- Setting up your environment for Convergent Minds ---"
 echo
 
 # 1. Create Python virtual environment

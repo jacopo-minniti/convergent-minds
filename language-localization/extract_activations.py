@@ -26,9 +26,15 @@ def seed_everything(seed: int):
 
 class Fed10_LocLangDataset(Dataset):
     """Custom dataset for the Fedorenko2010 language localization experiment."""
-    def __init__(self, dirpath):
+    def __init__(self, dirpath, is_pretrained=True):
         # Load and concatenate all CSV files from the directory
         paths = glob(f"{dirpath}/*.csv")
+        if not paths:
+            raise FileNotFoundError(f"No CSV files found in directory: {dirpath}")
+        
+        vocab = set()
+        self.is_pretrained = is_pretrained
+        
         data = pd.read_csv(paths[0])
         for path in paths[1:]:
             run_data = pd.read_csv(path)
@@ -104,36 +110,39 @@ if __name__ == "__main__":
     num_samples = 240 # Number of samples in the Fedorenko2010 dataset
 
     # Define save path and check for existing files
-    savepath = f"language-localization/reps_model={args.model_name}_dataset={args.dataset_name}_pretrained=True_agg={args.embed_agg}_seed={args.seed}.pkl"
+    savepath = f"dumps/reps_model={args.model_name}_dataset={args.dataset_name}_pretrained=True_agg={args.embed_agg}_seed={args.seed}.pkl"
+    
+    # Create dumps directory if it doesn't exist
+    os.makedirs(os.path.dirname(savepath), exist_ok=True)
+    
     if os.path.exists(savepath) and not args.overwrite:
         print(f"> Already Exists: {savepath}")
         exit()
 
+    # --- Device Configuration ---
+    device = f'cuda:{args.cuda}' if torch.cuda.is_available() else "cpu"
+    print(f"> Using Device: {device}")
+
     # --- Model and Tokenizer Loading ---
     print(f"> Loading model: {args.model_name}")
-    model = AutoModelForCausalLM.from_pretrained(args.model_name, device_map="cpu", torch_dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, device_map=device, dtype=torch.float32)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, padding_side='left')
     tokenizer.pad_token = tokenizer.eos_token
 
     # --- Dataset and Dataloader ---
     if args.dataset_name == "fedorenko10":
-        # Path to the Fedorenko2010 stimuli, assuming it's in the parent directory
-        dirpath = f"../../language-localization/fedorenko10_stimuli"
-        lang_dataset = Fed10_LocLangDataset(dirpath)
+        # Path to the Fedorenko2010 stimuli
+        dirpath = f"language-localization/fedorenko10_stimuli"
+        lang_dataset = Fed10_LocLangDataset(dirpath, is_pretrained=True)
     else:
         raise ValueError(f"Dataset {args.dataset_name} not implemented")
 
     layer_names: list[str] = get_layer_names(args.model_name)
     hidden_dim = model.config.hidden_size
     
-    lang_dataloader = DataLoader(lang_dataset, batch_size=args.batch_size, num_workers=16)
-
-    # --- Device Configuration ---
-    device = f'cuda:{args.cuda}' if torch.cuda.is_available() else "cpu"
-    print(f"> Using Device: {device}")
+    lang_dataloader = DataLoader(lang_dataset, batch_size=args.batch_size, num_workers=8)
 
     model.eval()
-    model.to(device)
 
     # --- Representation Extraction ---
     # Initialize dictionary to store final representations

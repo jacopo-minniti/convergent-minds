@@ -3,6 +3,7 @@ import argparse
 import numpy as np
 from scipy.stats import ttest_ind
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from utils import read_pickle, write_pickle
 
@@ -72,9 +73,9 @@ if __name__ == "__main__":
 
     # --- Path Definitions ---
     # Path to the extracted representations file
-    reps_path = f"language-localization/reps_model={args.model_name}_dataset={args.dataset_name}_pretrained=True_agg={args.embed_agg}_seed={args.seed}.pkl"
+    reps_path = f"dumps/reps_model={args.model_name}_dataset={args.dataset_name}_pretrained=True_agg={args.embed_agg}_seed={args.seed}.pkl"
     # Path to save the resulting language unit mask
-    mask_path = f"language-localization/l-mask_model={args.model_name}_dataset={args.dataset_name}_pretrained=True_agg={args.embed_agg}_nunits={args.num_units}_seed={args.seed}.pkl"
+    mask_path = f"dumps/l-mask_model={args.model_name}_dataset={args.dataset_name}_pretrained=True_agg={args.embed_agg}_nunits={args.num_units}_seed={args.seed}.pkl"
 
     # --- File Existence Checks ---
     if not os.path.exists(reps_path):
@@ -97,6 +98,33 @@ if __name__ == "__main__":
         non_word_activations=non_word_activations,
         num_units=args.num_units,
     )
+
+    # --- Visualization ---
+    print("> Creating visualization of language unit distribution...")
+    
+    # Count units per layer
+    layer_counts = {}
+    for layer_name, unit_indices in lang_unit_masks.items():
+        layer_counts[layer_name] = len(unit_indices)
+    
+    # Create bar plot
+    plt.figure(figsize=(12, 6))
+    layers = list(layer_counts.keys())
+    counts = list(layer_counts.values())
+    
+    plt.bar(range(len(layers)), counts, alpha=0.7, color='steelblue')
+    plt.xlabel('Layer')
+    plt.ylabel('Number of Language Units')
+    plt.title(f'Distribution of {args.num_units} Language Units Across Model Layers\n{args.model_name} - {args.dataset_name}')
+    plt.xticks(range(len(layers)), [layer.replace('transformer.h.', '') for layer in layers], rotation=45)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = f"dumps/l-units-dist_model={args.model_name}_dataset={args.dataset_name}_pretrained=True_agg={args.embed_agg}_nunits={args.num_units}_seed={args.seed}.png"
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"> Saved language units distribution plot to: {plot_path}")
 
     # --- Saving Results ---
     print(f"> Saving language unit mask to: {mask_path}")
