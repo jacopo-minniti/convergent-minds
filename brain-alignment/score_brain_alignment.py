@@ -52,7 +52,7 @@ def score_model(
 
     # --- Path Definitions and File Checks ---
     model_id = f"model={model_name}_benchmark={benchmark_name}_seed={seed}"
-    savepath = f"brain-alignment/dumps/scores_{model_id}.pkl"
+    savepath = f"dumps/scores_{model_id}.pkl"
     
     if os.path.exists(savepath) and not debug and not overwrite:
         print(f"> Run Already Exists: {savepath}")
