@@ -21,6 +21,7 @@ class ModelSubject(HuggingfaceSubject):
     def __init__(self, model_id, model, tokenizer, region_layer_mapping, lang_unit_mask=None):
         super().__init__(model_id=model_id, model=model, tokenizer=tokenizer, region_layer_mapping=region_layer_mapping)
         self.lang_unit_mask = lang_unit_mask
+        self._hook_handles = []
 
     def start_neural_recording(self, recording_target: ArtificialSubject.RecordingTarget, recording_type: ArtificialSubject.RecordingType):
         """Specifies which layers to record from."""
