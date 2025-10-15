@@ -20,9 +20,9 @@ class ModelSubject(HuggingfaceSubject):
     """A wrapper for HuggingFace models to be used as brain-score subjects."""
     def start_neural_recording(self, recording_target: ArtificialSubject.RecordingTarget, recording_type: ArtificialSubject.RecordingType):
         """Specifies which layers to record from."""
-        if recording_target not in self._region_layer_mapping:
+        if recording_target not in self.region_layer_mapping:
             raise NotImplementedError(f"Recording target {recording_target} not supported.")
-        self._layers_to_record = self._region_layer_mapping[recording_target]
+        self._layers_to_record = self.region_layer_mapping[recording_target]
 
 def seed_everything(seed: int):    
     """Set seed for reproducibility."""
@@ -46,13 +46,12 @@ def score_model(
         seed: int = 42,
         debug: bool = False,
         overwrite: bool = False,
-        embed_agg: str = "last-token",
 ):
     """Scores a model on a given brain-score benchmark."""
     seed_everything(seed=seed)
 
     # --- Path Definitions and File Checks ---
-    model_id = f"model={model_name}_benchmark={benchmark_name}_seed={seed}_agg={embed_agg}"
+    model_id = f"model={model_name}_benchmark={benchmark_name}_seed={seed}"
     savepath = f"brain-alignment/dumps/scores_{model_id}.pkl"
     
     if os.path.exists(savepath) and not debug and not overwrite:
@@ -66,8 +65,14 @@ def score_model(
     print(f"> Running {model_id}")
 
     # --- Model and Tokenizer Loading ---
+    device = f"cuda:{cuda}" if torch.cuda.is_available() and cuda >= 0 else "cpu"
+    print(f"> Using device: {device}")
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name, truncation_side='left')
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map="cpu")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
     model.eval()
 
     # --- Layer and Model Subject Setup ---
@@ -84,9 +89,7 @@ def score_model(
         tokenizer=tokenizer, 
         region_layer_mapping={
             ArtificialSubject.RecordingTarget.language_system: layer_names
-        }, 
-        agg_method=embed_agg, 
-        device=f"cuda:{cuda}", 
+        }
     )
 
     # --- Scoring ---
@@ -107,7 +110,6 @@ if __name__ == "__main__":
     parser.add_argument('--overwrite',  action='store_true', help='Overwrite existing files')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     parser.add_argument('--cuda', type=int, default=0, help='CUDA device index')
-    parser.add_argument('--embed-agg', type=str, default='last-token', help='Aggregation method for embeddings')
     args = parser.parse_args()
 
     score_model(**vars(args))
