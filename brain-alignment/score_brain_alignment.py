@@ -11,18 +11,48 @@ import pickle as pkl
 from tqdm import tqdm
 from brainscore_language import load_benchmark, ArtificialSubject
 from brainscore_language.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 
 warnings.filterwarnings('ignore') 
 
 class ModelSubject(HuggingfaceSubject):
     """A wrapper for HuggingFace models to be used as brain-score subjects."""
+    def __init__(self, model_id, model, tokenizer, region_layer_mapping, lang_unit_mask=None):
+        super().__init__(model_id=model_id, model=model, tokenizer=tokenizer, region_layer_mapping=region_layer_mapping)
+        self.lang_unit_mask = lang_unit_mask
+
     def start_neural_recording(self, recording_target: ArtificialSubject.RecordingTarget, recording_type: ArtificialSubject.RecordingType):
         """Specifies which layers to record from."""
         if recording_target not in self.region_layer_mapping:
             raise NotImplementedError(f"Recording target {recording_target} not supported.")
-        super().start_neural_recording(recording_target, recording_type)
+
+        if not self.lang_unit_mask:
+            super().start_neural_recording(recording_target, recording_type)
+            return
+
+        self._recording_target = recording_target
+        self._recording_type = recording_type
+        self._layers = self.region_layer_mapping[recording_target]
+
+        for handle in self._hook_handles:
+            handle.remove()
+        self._hook_handles = []
+
+        for layer_name in self._layers:
+            layer = self._get_layer(layer_name)
+            handle = layer.register_forward_hook(self._forward_hook_with_mask(layer_name))
+            self._hook_handles.append(handle)
+
+    def _forward_hook_with_mask(self, layer_name):
+        def hook(module, input, output):
+            activations = output[0]
+            if self.lang_unit_mask and layer_name in self.lang_unit_mask:
+                unit_indices = self.lang_unit_mask[layer_name]
+                if len(unit_indices) > 0:
+                    activations = activations[:, :, unit_indices]
+            self._layer_representations[layer_name].append(activations)
+        return hook
 
 def seed_everything(seed: int):    
     """Set seed for reproducibility."""
@@ -39,6 +69,11 @@ def write_pickle(path, data):
     with open(path, 'wb') as f:
         pkl.dump(data, f)
 
+def read_pickle(path):
+    """Read data from a pickle file."""
+    with open(path, 'rb') as f:
+        return pkl.load(f)
+
 def score_model(
         model_name: str,
         benchmark_name: str,
@@ -46,6 +81,8 @@ def score_model(
         seed: int = 42,
         debug: bool = False,
         overwrite: bool = False,
+        untrained: bool = False,
+        lang_mask_path: str = None,
 ):
     """Scores a model on a given brain-score benchmark."""
     seed_everything(seed=seed)
@@ -53,6 +90,12 @@ def score_model(
     # --- Path Definitions and File Checks ---
     model_id = f"model={model_name}_benchmark={benchmark_name}_seed={seed}"
     savepath = f"dumps/scores_{model_id}.pkl"
+
+    lang_unit_mask = None
+    if lang_mask_path:
+        print(f"> Loading language unit mask from: {lang_mask_path}")
+        lang_unit_mask = read_pickle(lang_mask_path)
+        model_id += f"_lang-mask={os.path.basename(lang_mask_path).replace('.pkl','')}"
     
     if os.path.exists(savepath) and not debug and not overwrite:
         print(f"> Run Already Exists: {savepath}")
@@ -72,7 +115,16 @@ def score_model(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
+    if untrained:
+        print("> Using an UNTRAINED model")
+        config = AutoConfig.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_config(config)
+        model.to(device)
+        model_id += "_untrained"
+    else:
+        print("> Using a PRETRAINED model")
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
+    
     model.eval()
 
     # --- Layer and Model Subject Setup ---
@@ -89,7 +141,8 @@ def score_model(
         tokenizer=tokenizer, 
         region_layer_mapping={
             ArtificialSubject.RecordingTarget.language_system: layer_names
-        }
+        },
+        lang_unit_mask=lang_unit_mask
     )
 
     # --- Scoring ---
@@ -110,6 +163,8 @@ if __name__ == "__main__":
     parser.add_argument('--overwrite',  action='store_true', help='Overwrite existing files')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
     parser.add_argument('--cuda', type=int, default=0, help='CUDA device index')
+    parser.add_argument('--lang-mask-path', type=str, default=None, help='Path to language unit mask file')
+    parser.add_argument('--untrained', action='store_true', help='Use an untrained model')
     args = parser.parse_args()
 
     score_model(**vars(args))
