@@ -21,10 +21,11 @@ class ModelSubject(HuggingfaceSubject):
     def __init__(self, model_id, model, tokenizer, region_layer_mapping, lang_unit_mask=None):
         super().__init__(model_id=model_id, model=model, tokenizer=tokenizer, region_layer_mapping=region_layer_mapping)
         self.lang_unit_mask = lang_unit_mask
-        self._hook_handles = []
 
     def start_neural_recording(self, recording_target: ArtificialSubject.RecordingTarget, recording_type: ArtificialSubject.RecordingType):
         """Specifies which layers to record from."""
+        from collections import defaultdict
+
         if recording_target not in self.region_layer_mapping:
             raise NotImplementedError(f"Recording target {recording_target} not supported.")
 
@@ -32,12 +33,15 @@ class ModelSubject(HuggingfaceSubject):
             super().start_neural_recording(recording_target, recording_type)
             return
 
+        self._layer_representations = defaultdict(list)
         self._recording_target = recording_target
         self._recording_type = recording_type
         self._layers = self.region_layer_mapping[recording_target]
 
-        for handle in self._hook_handles:
-            handle.remove()
+        if hasattr(self, '_hook_handles'):
+            for handle in self._hook_handles:
+                handle.remove()
+        
         self._hook_handles = []
 
         for layer_name in self._layers:
