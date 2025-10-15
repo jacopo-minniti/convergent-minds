@@ -22,7 +22,7 @@ class ModelSubject(HuggingfaceSubject):
         """Specifies which layers to record from."""
         if recording_target not in self.region_layer_mapping:
             raise NotImplementedError(f"Recording target {recording_target} not supported.")
-        self._layers_to_record = self.region_layer_mapping[recording_target]
+        super().start_neural_recording(recording_target, recording_type)
 
 def seed_everything(seed: int):    
     """Set seed for reproducibility."""
