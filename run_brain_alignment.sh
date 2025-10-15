@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=alignment
 #SBATCH --account=aip-rudner
-#SBATCH --time=00:30:00
+#SBATCH --time=00:50:00
 #SBATCH --gpus-per-node=h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=5G
