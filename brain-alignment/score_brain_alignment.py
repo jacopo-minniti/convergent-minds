@@ -51,12 +51,11 @@ class ModelSubject(HuggingfaceSubject):
 
     def _forward_hook_with_mask(self, layer_name):
         def hook(module, input, output):
-            activations = output[0]
-            if self.lang_unit_mask and layer_name in self.lang_unit_mask:
+            if layer_name in self.lang_unit_mask:
                 unit_indices = self.lang_unit_mask[layer_name]
                 if len(unit_indices) > 0:
-                    activations = activations[:, :, unit_indices]
-            self._layer_representations[layer_name].append(activations)
+                    activations = output[0][:, :, unit_indices]
+                    self._layer_representations[layer_name].append(activations)
         return hook
 
 def seed_everything(seed: int):    
