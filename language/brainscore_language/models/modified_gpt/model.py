@@ -48,7 +48,7 @@ class ModifiedGPT2(HuggingfaceSubject):
     def __init__(self, model_id, region_layer_mapping):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         for i, layer in enumerate(model.transformer.h):
-            layer.attn = ModifiedGPT2Attention(model.config)
+            layer.attn = ModifiedGPT2Attention(model.config, layer_idx=i)
         super().__init__(model_id=model_id,
                          region_layer_mapping=region_layer_mapping,
                          model=model)
