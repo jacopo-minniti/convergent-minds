@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pickle as pkl
 from tqdm import tqdm
-from brainscore_language import load_benchmark, ArtificialSubject
+from brainscore_language import load_benchmark, ArtificialSubject, load_model
 from brainscore_language.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
@@ -130,19 +130,25 @@ def score_model(
     device = f"cuda:{cuda}" if torch.cuda.is_available() and cuda >= 0 else "cpu"
     print(f"> Using device: {device}")
     
-    tokenizer = AutoTokenizer.from_pretrained(model_name, truncation_side='left')
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    if untrained:
-        print("> Using an UNTRAINED model")
-        config = AutoConfig.from_pretrained(model_name)
-        model = AutoModelForCausalLM.from_config(config)
+    if 'modified' in model_name:
+        subject = load_model(model_name)
+        model = subject.basemodel
+        tokenizer = subject.tokenizer
         model.to(device)
-        model_id += "_untrained"
     else:
-        print("> Using a PRETRAINED model")
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, truncation_side='left')
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        if untrained:
+            print("> Using an UNTRAINED model")
+            config = AutoConfig.from_pretrained(model_name)
+            model = AutoModelForCausalLM.from_config(config)
+            model.to(device)
+            model_id += "_untrained"
+        else:
+            print("> Using a PRETRAINED model")
+            model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
     
     model.eval()
 
