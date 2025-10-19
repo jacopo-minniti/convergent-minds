@@ -24,6 +24,8 @@ def get_layer_names(model_id: str, model_type: str = None) -> List[str]:
     """
     Returns a list of layer names for a given HuggingFace model.
     """
+    if model_id == 'modified-gpt2':
+        model_id = 'gpt2'
     config = AutoConfig.from_pretrained(model_id)
     if model_type is None:
         model_type = getattr(config, "model_type", None)
