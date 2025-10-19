@@ -18,7 +18,7 @@ module load cudnn
 module load gcc opencv arrow
 module load mpi4py
 
-model_name="gpt2"
+model_name="modified-gpt2"
 benchmark_name="Pereira2018.243sentences-linear" # "Pereira2018.384sentences-cka"
 seed=42
 cuda=0
@@ -29,7 +29,7 @@ python brain-alignment/score_brain_alignment.py --model-name $model_name \
     --benchmark-name $benchmark_name \
     --seed $seed \
     --cuda $cuda \
-    --lang-mask-path dumps/l-mask_model=gpt2_dataset=fedorenko10_pretrained=True_agg=last-token_nunits=128_seed=42.pkl \
+    --lang-mask-path dumps/l-mask_model=modified-gpt2_dataset=fedorenko10_pretrained=True_agg=last-token_nunits=128_seed=42.pkl \
     --untrained \
     --overwrite
 
