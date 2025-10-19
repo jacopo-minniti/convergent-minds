@@ -40,10 +40,9 @@ def load_benchmark(identifier: str) -> Benchmark:
 
 def load_model(identifier: str) -> ArtificialSubject:
     import_plugin('brainscore_language', 'models', identifier)
-
+    
     model = model_registry[identifier]()
     model.identifier = identifier
-
     return model
 
 def _run_score(model_identifier: str, benchmark_identifier: str) -> Score:

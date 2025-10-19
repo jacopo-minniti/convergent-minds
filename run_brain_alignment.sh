@@ -29,7 +29,6 @@ python brain-alignment/score_brain_alignment.py --model-name $model_name \
     --benchmark-name $benchmark_name \
     --seed $seed \
     --cuda $cuda \
-    --lang-mask-path dumps/l-mask_model=modified-gpt2_dataset=fedorenko10_pretrained=True_agg=last-token_nunits=128_seed=42.pkl \
     --untrained \
     --overwrite
 
