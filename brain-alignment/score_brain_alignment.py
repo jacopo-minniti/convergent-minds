@@ -11,6 +11,7 @@ import pickle as pkl
 from tqdm import tqdm
 from brainscore_language import load_benchmark, ArtificialSubject, load_model
 from brainscore_language.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
+from brainscore_language.models.modified_gpt.model import ModifiedGPT2
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 
@@ -126,50 +127,60 @@ def score_model(
     benchmark = load_benchmark(benchmark_name)
     print(f"> Running {model_id}")
 
-    # --- Model and Tokenizer Loading ---
-    device = f"cuda:{cuda}" if torch.cuda.is_available() and cuda >= 0 else "cpu"
-    print(f"> Using device: {device}")
+            # --- Model and Tokenizer Loading ---
+            device = f"cuda:{cuda}" if torch.cuda.is_available() and cuda >= 0 else "cpu"
+            print(f"> Using device: {device}")
+            
+            if 'modified' in model_name:
+                base_model_name = model_name.split('-', 1)[1]
+                if untrained:
+                    model_id += "_untrained"
+                    print(f"> Using an UNTRAINED modified model ({base_model_name})")
+                else:
+                    print(f"> Using a PRETRAINED modified model ({base_model_name})")
     
-    if 'modified' in model_name:
-        subject = load_model(model_name)
-        model = subject.basemodel
-        tokenizer = subject.tokenizer
-        model.to(device)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(model_name, truncation_side='left')
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        
-        if untrained:
-            print("> Using an UNTRAINED model")
-            config = AutoConfig.from_pretrained(model_name)
-            model = AutoModelForCausalLM.from_config(config)
-            model.to(device)
-            model_id += "_untrained"
-        else:
-            print("> Using a PRETRAINED model")
-            model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
+                layer_names = get_layer_names(base_model_name, None)
+                subject = ModifiedGPT2(
+                    model_id=base_model_name,
+                    region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
+                    untrained=untrained
+                )
+                model = subject.model
+                tokenizer = subject.tokenizer
+                model.to(device)
+            else:
+                layer_names = get_layer_names(model_name, None)
+                tokenizer = AutoTokenizer.from_pretrained(model_name, truncation_side='left')
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+                
+                if untrained:
+                    print("> Using an UNTRAINED model")
+                    config = AutoConfig.from_pretrained(model_name)
+                    model = AutoModelForCausalLM.from_config(config)
+                    model.to(device)
+                    model_id += "_untrained"
+                else:
+                    print("> Using a PRETRAINED model")
+                    model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
+            
+            model.eval()
     
-    model.eval()
-
-    # --- Layer and Model Subject Setup ---
-    layer_names = get_layer_names(model_name, None)
-     
-    print("> Layer Names")
-    print(layer_names)
-    print()
-    
-    # Create a brain-score subject from the model
-    layer_model = ModelSubject(
-        model_id=model_id, 
-        model=model, 
-        tokenizer=tokenizer, 
-        region_layer_mapping={
-            ArtificialSubject.RecordingTarget.language_system: layer_names
-        },
-        lang_unit_mask=lang_unit_mask
-    )
-
+            # --- Layer and Model Subject Setup ---
+            print("> Layer Names")
+            print(layer_names)
+            print()
+            
+            # Create a brain-score subject from the model
+            layer_model = ModelSubject(
+                model_id=model_id, 
+                model=model, 
+                tokenizer=tokenizer, 
+                region_layer_mapping={
+                    ArtificialSubject.RecordingTarget.language_system: layer_names
+                },
+                lang_unit_mask=lang_unit_mask
+            )
     # --- Scoring ---
     print("> Running benchmark...")
     layer_scores = benchmark(layer_model)

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 from brainscore_language.model_helpers.huggingface import HuggingfaceSubject
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 class ModifiedGPT2Attention(GPT2Attention):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
@@ -45,10 +45,21 @@ class ModifiedGPT2Attention(GPT2Attention):
 
 
 class ModifiedGPT2(HuggingfaceSubject):
-    def __init__(self, model_id, region_layer_mapping):
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+    def __init__(self, model_id, region_layer_mapping, untrained=False):
+        if untrained:
+            config = AutoConfig.from_pretrained(model_id)
+            model = AutoModelForCausalLM.from_config(config)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model_id)
+
         for i, layer in enumerate(model.transformer.h):
             layer.attn = ModifiedGPT2Attention(model.config, layer_idx=i)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, truncation_side='left')
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
         super().__init__(model_id=model_id,
                          region_layer_mapping=region_layer_mapping,
-                         model=model)
+                         model=model,
+                         tokenizer=tokenizer)
