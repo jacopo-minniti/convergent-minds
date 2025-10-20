@@ -115,6 +115,7 @@ class HuggingfaceSubject(ArtificialSubject):
         self.basemodel = (model if model is not None else AutoModelForCausalLM.from_pretrained(self.model_id))
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.basemodel.to(self.device)
+        self.model = self.basemodel
         self.tokenizer = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(self.model_id,
                                                                                                truncation_side='left')
         self.current_tokens = None  # keep track of current tokens
