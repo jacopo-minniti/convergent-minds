@@ -18,7 +18,7 @@ module load cudnn
 module load gcc opencv arrow
 module load mpi4py
 
-model_name="modified-gpt2"
+model_name="locality-gpt2"
 benchmark_name="Pereira2018.243sentences-linear" # "Pereira2018.384sentences-cka"
 seed=42
 cuda=0
@@ -29,6 +29,6 @@ python brain-alignment/score_brain_alignment.py --model-name $model_name \
     --benchmark-name $benchmark_name \
     --seed $seed \
     --cuda $cuda \
-    --untrained \
-    --overwrite
-
+    --overwrite \
+    --savepath dumps/scores_untrained_locality_-0.3_gpt2_Pereira2018.243_linear.pkl \
+    --untrained

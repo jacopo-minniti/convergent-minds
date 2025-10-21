@@ -11,7 +11,7 @@ import pickle as pkl
 from tqdm import tqdm
 from brainscore_language import load_benchmark, ArtificialSubject, load_model
 from brainscore_language.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
-from brainscore_language.models.modified_gpt.model import ModifiedGPT2
+from brainscore_language.models.locality_gpt.model import LocalityGPT2
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 
@@ -97,19 +97,19 @@ def read_pickle(path):
 def score_model(
         model_name: str,
         benchmark_name: str,
+        savepath: str,
         cuda: int,
         seed: int = 42,
         debug: bool = False,
         overwrite: bool = False,
         untrained: bool = False,
-        lang_mask_path: str = None,
+        lang_mask_path: str | None = None,
 ):
     """Scores a model on a given brain-score benchmark."""
     seed_everything(seed=seed)
 
     # --- Path Definitions and File Checks ---
     model_id = f"model={model_name}_benchmark={benchmark_name}_seed={seed}"
-    savepath = f"dumps/scores_{model_id}.pkl"
 
     lang_unit_mask = None
     if lang_mask_path:
@@ -131,7 +131,7 @@ def score_model(
     device = f"cuda:{cuda}" if torch.cuda.is_available() and cuda >= 0 else "cpu"
     print(f"> Using device: {device}")
     
-    if 'modified' in model_name:
+    if 'locality' in model_name:
         base_model_name = model_name.split('-', 1)[1]
         if untrained:
             model_id += "_untrained"
@@ -140,10 +140,11 @@ def score_model(
             print(f"> Using a PRETRAINED modified model ({base_model_name})")
 
         layer_names = get_layer_names(base_model_name, None)
-        subject = ModifiedGPT2(
+        subject = LocalityGPT2(
             model_id=base_model_name,
             region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
-            untrained=untrained
+            untrained=untrained,
+            decay_rate=-0.3
         )
         model = subject.model
         tokenizer = subject.tokenizer
@@ -195,6 +196,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Paramaters')
     parser.add_argument('--model-name',  type=str, default="gpt2", help='HuggingFace model name')
     parser.add_argument('--benchmark-name',  type=str, default="Pereira2018.384sentences-cka", help='Brain-score benchmark name')
+    parser.add_argument('--savepath', type=str, required=True, help='Path to save the scores')
     parser.add_argument('--debug',  action='store_true', help='Debug mode')
     parser.add_argument('--overwrite',  action='store_true', help='Overwrite existing files')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
