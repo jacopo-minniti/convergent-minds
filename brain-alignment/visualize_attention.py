@@ -4,8 +4,6 @@ Utility script to visualize how the locality bias changes GPT-2 attentions.
 
 The script runs a prompt through several model variants (different decay rates,
 untrained vs. pretrained) and saves heatmaps plus distance profiles to `dumps/`.
-This helps inspect whether supposedly different settings actually yield the
-same attention structure, complementing the scalar benchmark scores.
 """
 
 import argparse
@@ -22,13 +20,11 @@ from transformers import (  # noqa: E402
     AutoModelForCausalLM,
     AutoTokenizer,
 )
-from brainscore_language import load_benchmark, load_dataset  # noqa: E402
 
 from brainscore_language.models.locality_gpt.model import LocalityGPT2Attention  # noqa: E402
 
 
 def parse_decay_rate(decay_str: str) -> Optional[float]:
-    """Returns None if string is 'none', otherwise a float."""
     if decay_str is None:
         return None
     cleaned = decay_str.strip().lower()
@@ -38,7 +34,6 @@ def parse_decay_rate(decay_str: str) -> Optional[float]:
 
 
 def build_model(model_name: str, decay_rate: Optional[float], untrained: bool, device: torch.device):
-    """Loads GPT-2 and optionally injects LocalityGPT2Attention layers."""
     if untrained:
         config = AutoConfig.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_config(config)
@@ -55,7 +50,6 @@ def build_model(model_name: str, decay_rate: Optional[float], untrained: bool, d
 
 
 def collect_average_attention(model, tokenizer, prompt: str, max_length: int, device: torch.device):
-    """Runs the prompt and returns attention tensors averaged over heads."""
     encoded = tokenizer(
         prompt,
         truncation=True,
@@ -66,117 +60,13 @@ def collect_average_attention(model, tokenizer, prompt: str, max_length: int, de
     with torch.no_grad():
         outputs = model(**encoded, output_attentions=True)
 
-    # Each element of outputs.attentions is (batch, heads, seq, seq)
-    attn_stack = torch.stack(outputs.attentions, dim=0)  # (layers, batch, heads, seq, seq)
-    attn_avg = attn_stack.mean(dim=2).squeeze(1).cpu()  # (layers, seq, seq)
+    attn_stack = torch.stack(outputs.attentions, dim=0)
+    attn_avg = attn_stack.mean(dim=2).squeeze(1).cpu()
     tokens = tokenizer.convert_ids_to_tokens(encoded["input_ids"][0])
     return attn_avg, tokens
 
 
-DATASET_FALLBACKS = {
-    "Pereira2018": "Pereira2018.language",
-    "Blank2014": "Blank2014.fROI",
-    "Fedorenko2016": "Fedorenko2016.language",
-    "Tuckute2024": "Tuckute2024.language",
-    "Futrell2018": "Futrell2018",
-}
-
-
-def _load_dataset_for_benchmark(benchmark_name: str, explicit_name: Optional[str] = None):
-    """Attempt to load a registered dataset related to the benchmark."""
-    prefix = benchmark_name.split(".", 1)[0]
-    dataset_candidates = []
-    if explicit_name:
-        dataset_candidates.append(explicit_name)
-    if prefix in DATASET_FALLBACKS:
-        dataset_candidates.append(DATASET_FALLBACKS[prefix])
-    dataset_candidates.extend(
-        [
-            prefix,
-            f"{prefix}.language",
-            f"{prefix}.fROI",
-            f"{prefix}.stimuli",
-        ]
-    )
-
-    tried = set()
-    for candidate in dataset_candidates:
-        if candidate in tried:
-            continue
-        tried.add(candidate)
-        try:
-            return load_dataset(candidate)
-        except Exception:
-            continue
-    return None
-
-
-def fetch_prompt_from_benchmark(
-    benchmark_name: str,
-    index: int,
-    preferred_column: Optional[str],
-    dataset_name: Optional[str],
-) -> str:
-    """Loads a benchmark and returns one of its stimulus sentences."""
-    benchmark = load_benchmark(benchmark_name)
-
-    # Prefer using the NeuroidAssembly directly if present (e.g., Pereira benchmarks expose .data).
-    assembly = getattr(benchmark, "data", None)
-    if assembly is not None and "stimulus" in assembly.coords:
-        texts = assembly["stimulus"].values
-        if len(texts) == 0:
-            raise ValueError(f"Benchmark {benchmark_name} has an empty stimulus coordinate.")
-        return str(texts[index % len(texts)])
-
-    # Fall back to a stored StimulusSet/DataFrame if available.
-    stimulus_set = None
-    target = getattr(benchmark, "_target", None)
-    if target is not None and hasattr(target, "stimulus_set"):
-        stimulus_set = target.stimulus_set
-    if stimulus_set is None:
-        dataset = _load_dataset_for_benchmark(benchmark_name, explicit_name=dataset_name)
-        if dataset is not None and "stimulus" in dataset.coords:
-            texts = dataset["stimulus"].values
-            if len(texts) == 0:
-                raise ValueError(f"Dataset for {benchmark_name} has an empty stimulus coordinate.")
-            return str(texts[index % len(texts)])
-        raise ValueError(
-            f"Could not access stimuli for benchmark {benchmark_name}. "
-            "Benchmark object lacks `.data['stimulus']` and `_target.stimulus_set`, "
-            "and dataset lookup failed.",
-        )
-
-    if not hasattr(stimulus_set, "iloc"):
-        raise ValueError("Stimulus set is not DataFrame-like; cannot extract prompt automatically.")
-
-    if not len(stimulus_set):
-        raise ValueError(f"Benchmark {benchmark_name} stimulus set is empty.")
-
-    column_candidates = []
-    if preferred_column:
-        column_candidates.append(preferred_column)
-    column_candidates.extend(["sentence", "text", "passage", "content", "stimulus"])
-
-    chosen_column = None
-    for column in column_candidates:
-        if column in stimulus_set.columns:
-            chosen_column = column
-            break
-
-    if chosen_column is None:
-        raise ValueError(
-            f"Could not find a text column in stimulus set. Available columns: {list(stimulus_set.columns)}",
-        )
-
-    row = stimulus_set.iloc[index % len(stimulus_set)]
-    text = row[chosen_column]
-    if not isinstance(text, str):
-        raise ValueError(f"Selected column '{chosen_column}' does not contain strings (value: {text}).")
-    return text
-
-
 def plot_heatmap(matrix: torch.Tensor, tokens: List[str], title: str, filepath: str):
-    """Saves an attention heatmap averaged across layers."""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     fig, ax = plt.subplots(figsize=(max(6, len(tokens) * 0.6), 5))
     im = ax.imshow(matrix, cmap="viridis")
@@ -192,7 +82,6 @@ def plot_heatmap(matrix: torch.Tensor, tokens: List[str], title: str, filepath: 
 
 
 def compute_distance_profile(matrix: torch.Tensor) -> List[float]:
-    """Averages attention weights by absolute token distance."""
     seq_len = matrix.shape[-1]
     distances = torch.arange(seq_len)
     dist_matrix = torch.abs(distances.unsqueeze(0) - distances.unsqueeze(1))
@@ -207,7 +96,6 @@ def compute_distance_profile(matrix: torch.Tensor) -> List[float]:
 
 
 def plot_distance_profile(profile: List[float], title: str, filepath: str):
-    """Saves a line plot of average attention weight vs. token distance."""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(range(len(profile)), profile, marker="o")
@@ -221,16 +109,8 @@ def plot_distance_profile(profile: List[float], title: str, filepath: str):
 
 
 def visualize(decay_labels: List[str], args):
-    prompt = args.prompt
-    if prompt is None:
-        if not args.benchmark_name:
-            raise ValueError("Provide either --prompt or --benchmark-name.")
-        prompt = fetch_prompt_from_benchmark(
-            benchmark_name=args.benchmark_name,
-            index=args.benchmark_index,
-            preferred_column=args.benchmark_column,
-            dataset_name=args.dataset_name,
-        )
+    if not args.prompt:
+        raise ValueError("Please provide --prompt to visualize attention.")
 
     device = torch.device(args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu"))
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, truncation_side="left")
@@ -241,7 +121,7 @@ def visualize(decay_labels: List[str], args):
     for label in decay_labels:
         decay_rate = parse_decay_rate(label)
         model = build_model(args.model_name, decay_rate, args.untrained, device)
-        attn_layers, tokens = collect_average_attention(model, tokenizer, prompt, args.max_length, device)
+        attn_layers, tokens = collect_average_attention(model, tokenizer, args.prompt, args.max_length, device)
         avg_matrix = attn_layers.mean(dim=0)
         profile = compute_distance_profile(avg_matrix)
         label_str = "baseline" if decay_rate is None else f"decay_{decay_rate}"
@@ -276,7 +156,7 @@ def visualize(decay_labels: List[str], args):
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize GPT-2 attention patterns under locality modifications.")
-    parser.add_argument("--prompt", type=str, help="Text prompt to feed into the model.")
+    parser.add_argument("--prompt", type=str, required=True, help="Text prompt to feed into the model.")
     parser.add_argument(
         "--decay-rates",
         nargs="+",
@@ -294,30 +174,6 @@ def main():
         help="If set, saves difference heatmaps relative to the first decay rate.",
     )
     parser.add_argument("--device", type=str, default=None, help="Device string passed to torch.device().")
-    parser.add_argument(
-        "--benchmark-name",
-        type=str,
-        default=None,
-        help="If set, pulls a prompt from this brainscore benchmark instead of --prompt.",
-    )
-    parser.add_argument(
-        "--benchmark-index",
-        type=int,
-        default=0,
-        help="Row index from the benchmark stimulus set to use as prompt.",
-    )
-    parser.add_argument(
-        "--benchmark-column",
-        type=str,
-        default=None,
-        help="Optional column name in the stimulus set that contains the text (defaults to common names).",
-    )
-    parser.add_argument(
-        "--dataset-name",
-        type=str,
-        default=None,
-        help="Optional dataset identifier to use directly when extracting benchmark prompts.",
-    )
     args = parser.parse_args()
 
     visualize(args.decay_rates, args)
