@@ -37,7 +37,7 @@ def main():
     score_files = {
         "Untrained-GPT2": "dumps/scores_untrained_gpt2_Pereira2018.243_linear.pkl",
         "Untrained-LocalityGPT2 (1.0)": "dumps/scores_untrained_locality_1.0_gpt2_Pereira2018.243_linear.pkl",
-        "Untrained-LocalityGPT2 (-0.1)": "dumps/scores_untrained_locality_-0.1_gpt2_Pereira2018.243_linear.pkl"
+        "Untrained-LocalityGPT2 (-0.3)": "dumps/scores_untrained_locality_-0.3_gpt2_Pereira2018.243_linear.pkl"
     }
     
     print("=== Score Inspection Results ===")
