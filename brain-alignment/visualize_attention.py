@@ -44,6 +44,8 @@ def build_model(model_name: str, decay_rate: Optional[float], untrained: bool, d
         for idx, layer in enumerate(model.transformer.h):
             layer.attn = LocalityGPT2Attention(model.config, layer_idx=idx, decay_rate=decay_rate)
 
+    model.config.output_attentions = True
+    model.config.use_cache = False
     model.to(device)
     model.eval()
     return model
@@ -60,7 +62,10 @@ def collect_average_attention(model, tokenizer, prompt: str, max_length: int, de
     with torch.no_grad():
         outputs = model(**encoded, output_attentions=True)
 
-    attn_stack = torch.stack(outputs.attentions, dim=0)
+    attentions = [att for att in outputs.attentions if att is not None]
+    if not attentions:
+        raise RuntimeError("Model did not return attention weights. Ensure output_attentions=True is supported.")
+    attn_stack = torch.stack(attentions, dim=0)
     attn_avg = attn_stack.mean(dim=2).squeeze(1).cpu()
     tokens = tokenizer.convert_ids_to_tokens(encoded["input_ids"][0])
     return attn_avg, tokens
