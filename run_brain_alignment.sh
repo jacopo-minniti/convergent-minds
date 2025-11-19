@@ -19,6 +19,7 @@ model_name="locality-gpt2"
 benchmark_name="Pereira2018.243sentences-linear" # "Pereira2018.384sentences-cka"
 seed=42
 cuda=0
+decay_rate=1.0
 
 source .venv/bin/activate
 
@@ -27,5 +28,6 @@ python brain-alignment/score_brain_alignment.py --model-name $model_name \
     --seed $seed \
     --cuda $cuda \
     --overwrite \
-    --savepath dumps/scores_untrained_locality_-0.3_gpt2_Pereira2018.243_linear.pkl \
-    --untrained
+    --savepath dumps/scores_untrained_locality_1.0_gpt2_Pereira2018.243_linear.pkl \
+    --untrained \
+    --decay-rate 1.0

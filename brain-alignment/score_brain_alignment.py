@@ -104,6 +104,7 @@ def score_model(
         overwrite: bool = False,
         untrained: bool = False,
         lang_mask_path: str | None = None,
+        decay_rate: float = 1.0,
 ):
     """Scores a model on a given brain-score benchmark."""
     seed_everything(seed=seed)
@@ -144,7 +145,7 @@ def score_model(
             model_id=base_model_name,
             region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
             untrained=untrained,
-            decay_rate=-0.3
+            decay_rate=decay_rate
         )
         model = subject.model
         tokenizer = subject.tokenizer
@@ -203,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument('--cuda', type=int, default=0, help='CUDA device index')
     parser.add_argument('--lang-mask-path', type=str, default=None, help='Path to language unit mask file')
     parser.add_argument('--untrained', action='store_true', help='Use an untrained model')
+    parser.add_argument('--decay-rate', type=float, default=1.0, help='Decay rate for locality model')
     args = parser.parse_args()
 
     score_model(**vars(args))
