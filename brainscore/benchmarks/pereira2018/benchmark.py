@@ -40,6 +40,14 @@ def Pereira2018_384sentences():
     ))
 
 
+def Pereira2018_243sentences_cka():
+    return _Pereira2018Experiment(experiment='243sentences', metric='cka')
+
+
+def Pereira2018_384sentences_cka():
+    return _Pereira2018Experiment(experiment='384sentences', metric='cka')
+
+
 class _Pereira2018ExperimentLinear(BenchmarkBase):
     """
     Evaluate model ability to predict neural activity in the human language system in response to natural sentences,
@@ -99,3 +107,44 @@ class _Pereira2018ExperimentLinear(BenchmarkBase):
         raw_score = self.metric(predictions, self.data)
         score = ceiling_normalize(raw_score, self.ceiling)
         return score
+
+
+class _Pereira2018Experiment(BenchmarkBase):
+    """
+    Evaluate model ability to predict neural activity in the human language system in response to natural sentences,
+    recorded by Pereira et al. 2018, using various metrics (CKA, RDM, etc.).
+    """
+
+    def __init__(self, experiment: str, metric: str):
+        self.data = self._load_data(experiment)
+        self.metric = load_metric(metric)
+        identifier = f'Pereira2018.{experiment}-{metric}'
+        super(_Pereira2018Experiment, self).__init__(
+            identifier=identifier,
+            version=1,
+            parent=f'Pereira2018-{metric}',
+            ceiling=None,
+            bibtex=BIBTEX)
+
+    def _load_data(self, experiment: str) -> NeuroidAssembly:
+        data = load_dataset('Pereira2018.language')
+        data = data.sel(experiment=experiment)  # filter experiment
+        data = data.dropna('neuroid')  # not all subjects have done both experiments, drop those that haven't
+        data.attrs['identifier'] = f"{data.identifier}.{experiment}"
+        return data
+
+    def __call__(self, candidate: ArtificialSubject) -> Score:
+        candidate.start_neural_recording(recording_target=ArtificialSubject.RecordingTarget.language_system,
+                                         recording_type=ArtificialSubject.RecordingType.fMRI)
+        stimuli = self.data['stimulus']
+        passages = self.data['passage_label'].values
+        predictions = []
+        for passage in sorted(set(passages)):  # go over individual passages, sorting to keep consistency across runs
+            passage_indexer = [stimulus_passage == passage for stimulus_passage in passages]
+            passage_stimuli = stimuli[passage_indexer]
+            passage_predictions = candidate.digest_text(passage_stimuli.values)['neural']
+            passage_predictions['stimulus_id'] = 'presentation', passage_stimuli['stimulus_id'].values
+            predictions.append(passage_predictions)
+        predictions = xr.concat(predictions, dim='presentation')
+        raw_score = self.metric(predictions, self.data)
+        return raw_score
