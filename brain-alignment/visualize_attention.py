@@ -76,7 +76,26 @@ def collect_average_attention(model, tokenizer, prompt: str, max_length: int, de
 def fetch_prompt_from_benchmark(benchmark_name: str, index: int, preferred_column: Optional[str]) -> str:
     """Loads a benchmark and returns one of its stimulus sentences."""
     benchmark = load_benchmark(benchmark_name)
-    stimulus_set = benchmark._target.stimulus_set
+
+    # Prefer using the NeuroidAssembly directly if present (e.g., Pereira benchmarks expose .data).
+    assembly = getattr(benchmark, "data", None)
+    if assembly is not None and "stimulus" in assembly.coords:
+        texts = assembly["stimulus"].values
+        if len(texts) == 0:
+            raise ValueError(f"Benchmark {benchmark_name} has an empty stimulus coordinate.")
+        return str(texts[index % len(texts)])
+
+    # Fall back to a stored StimulusSet/DataFrame if available.
+    stimulus_set = None
+    target = getattr(benchmark, "_target", None)
+    if target is not None and hasattr(target, "stimulus_set"):
+        stimulus_set = target.stimulus_set
+    if stimulus_set is None:
+        raise ValueError(
+            f"Could not access stimuli for benchmark {benchmark_name}. "
+            "Benchmark object lacks `.data['stimulus']` and `_target.stimulus_set`."
+        )
+
     if not hasattr(stimulus_set, "iloc"):
         raise ValueError("Stimulus set is not DataFrame-like; cannot extract prompt automatically.")
 
