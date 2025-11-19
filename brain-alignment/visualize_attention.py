@@ -34,19 +34,20 @@ def parse_decay_rate(decay_str: str) -> Optional[float]:
 
 
 def build_model(model_name: str, decay_rate: Optional[float], untrained: bool, device: torch.device):
+    config = AutoConfig.from_pretrained(model_name)
+    config.attn_implementation = "eager"
+    config.output_attentions = True
+    config.use_cache = False
+    
     if untrained:
-        config = AutoConfig.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_config(config)
     else:
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
 
     if decay_rate is not None:
         for idx, layer in enumerate(model.transformer.h):
             layer.attn = LocalityGPT2Attention(model.config, layer_idx=idx, decay_rate=decay_rate)
 
-    model.config.attn_implementation = "eager"
-    model.config.output_attentions = True
-    model.config.use_cache = False
     model.to(device)
     model.eval()
     return model
