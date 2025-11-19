@@ -44,6 +44,7 @@ def build_model(model_name: str, decay_rate: Optional[float], untrained: bool, d
         for idx, layer in enumerate(model.transformer.h):
             layer.attn = LocalityGPT2Attention(model.config, layer_idx=idx, decay_rate=decay_rate)
 
+    model.config.attn_implementation = "eager"
     model.config.output_attentions = True
     model.config.use_cache = False
     model.to(device)
