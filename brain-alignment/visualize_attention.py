@@ -22,7 +22,7 @@ from transformers import (  # noqa: E402
     AutoModelForCausalLM,
     AutoTokenizer,
 )
-from brainscore_language import load_benchmark  # noqa: E402
+from brainscore_language import load_benchmark, load_dataset  # noqa: E402
 
 from brainscore_language.models.locality_gpt.model import LocalityGPT2Attention  # noqa: E402
 
@@ -73,7 +73,50 @@ def collect_average_attention(model, tokenizer, prompt: str, max_length: int, de
     return attn_avg, tokens
 
 
-def fetch_prompt_from_benchmark(benchmark_name: str, index: int, preferred_column: Optional[str]) -> str:
+DATASET_FALLBACKS = {
+    "Pereira2018": "Pereira2018.language",
+    "Blank2014": "Blank2014.fROI",
+    "Fedorenko2016": "Fedorenko2016.language",
+    "Tuckute2024": "Tuckute2024.language",
+    "Futrell2018": "Futrell2018",
+}
+
+
+def _load_dataset_for_benchmark(benchmark_name: str, explicit_name: Optional[str] = None):
+    """Attempt to load a registered dataset related to the benchmark."""
+    prefix = benchmark_name.split(".", 1)[0]
+    dataset_candidates = []
+    if explicit_name:
+        dataset_candidates.append(explicit_name)
+    if prefix in DATASET_FALLBACKS:
+        dataset_candidates.append(DATASET_FALLBACKS[prefix])
+    dataset_candidates.extend(
+        [
+            prefix,
+            f"{prefix}.language",
+            f"{prefix}.fROI",
+            f"{prefix}.stimuli",
+        ]
+    )
+
+    tried = set()
+    for candidate in dataset_candidates:
+        if candidate in tried:
+            continue
+        tried.add(candidate)
+        try:
+            return load_dataset(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def fetch_prompt_from_benchmark(
+    benchmark_name: str,
+    index: int,
+    preferred_column: Optional[str],
+    dataset_name: Optional[str],
+) -> str:
     """Loads a benchmark and returns one of its stimulus sentences."""
     benchmark = load_benchmark(benchmark_name)
 
@@ -91,9 +134,16 @@ def fetch_prompt_from_benchmark(benchmark_name: str, index: int, preferred_colum
     if target is not None and hasattr(target, "stimulus_set"):
         stimulus_set = target.stimulus_set
     if stimulus_set is None:
+        dataset = _load_dataset_for_benchmark(benchmark_name, explicit_name=dataset_name)
+        if dataset is not None and "stimulus" in dataset.coords:
+            texts = dataset["stimulus"].values
+            if len(texts) == 0:
+                raise ValueError(f"Dataset for {benchmark_name} has an empty stimulus coordinate.")
+            return str(texts[index % len(texts)])
         raise ValueError(
             f"Could not access stimuli for benchmark {benchmark_name}. "
-            "Benchmark object lacks `.data['stimulus']` and `_target.stimulus_set`."
+            "Benchmark object lacks `.data['stimulus']` and `_target.stimulus_set`, "
+            "and dataset lookup failed.",
         )
 
     if not hasattr(stimulus_set, "iloc"):
@@ -179,6 +229,7 @@ def visualize(decay_labels: List[str], args):
             benchmark_name=args.benchmark_name,
             index=args.benchmark_index,
             preferred_column=args.benchmark_column,
+            dataset_name=args.dataset_name,
         )
 
     device = torch.device(args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -260,6 +311,12 @@ def main():
         type=str,
         default=None,
         help="Optional column name in the stimulus set that contains the text (defaults to common names).",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=None,
+        help="Optional dataset identifier to use directly when extracting benchmark prompts.",
     )
     args = parser.parse_args()
 
