@@ -15,22 +15,44 @@ def main():
     args = parser.parse_args()
 
     device = args.device
-    if device == 'cuda' and not torch.cuda.is_available():
+    # Allow numeric device IDs (e.g., 0) to refer to CUDA if available
+    if device.isdigit():
+        if torch.cuda.is_available():
+            device = 'cuda'
+        else:
+            print("CUDA not available, falling back to CPU")
+            device = 'cpu'
+    elif device == 'cuda' and not torch.cuda.is_available():
         print("CUDA not available, falling back to CPU")
         device = 'cpu'
 
     print(f"Loading model: {args.model} (Untrained: {args.untrained})")
     
     # Load Model and Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    import os
+    model_path = args.model
+    # Resolve possible paths: absolute, relative, or under 'models/' directory
+    if os.path.isabs(args.model) and os.path.isdir(args.model):
+        model_path = args.model
+    elif os.path.isdir(args.model):
+        model_path = args.model
+    else:
+        # Check if the model exists under the 'models' subdirectory
+        possible_path = os.path.join(os.getcwd(), "models", args.model)
+        if os.path.isdir(possible_path):
+            model_path = possible_path
+        else:
+            # Assume it's a HuggingFace model identifier
+            model_path = args.model
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     if args.untrained:
-        config = AutoConfig.from_pretrained(args.model)
+        config = AutoConfig.from_pretrained(model_path)
         model = AutoModelForCausalLM.from_config(config)
     else:
-        model = AutoModelForCausalLM.from_pretrained(args.model)
+        model = AutoModelForCausalLM.from_pretrained(model_path)
     
     model.to(device)
     model.eval()
