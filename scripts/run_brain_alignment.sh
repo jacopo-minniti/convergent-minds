@@ -15,19 +15,14 @@ module load python/3.11.5
 module load cuda/12.6 cudnn
 module load gcc opencv arrow mpi4py
 
-model_name="locality-gpt2"
-benchmark_name="Pereira2018.243sentences-linear" # "Pereira2018.384sentences-cka"
-seed=42
-cuda=0
-decay_rate=-0.3
-
 source .venv/bin/activate
 
-python brain-alignment/score_brain_alignment.py --model-name $model_name \
-    --benchmark-name $benchmark_name \
-    --seed $seed \
-    --cuda $cuda \
-    --overwrite \
-    --savepath dumps/scores_untrained_locality_-0.3_gpt2_Pereira2018.243_linear.pkl \
-    --untrained \
-    --decay-rate $decay_rate
+model_name="locality_gpt"
+benchmark_name="Pereira2018.243sentences-linear"
+cuda=0
+
+python main.py \
+    --model "$model_name" \
+    --benchmark "$benchmark_name" \
+    --device "$cuda" \
+    --untrained

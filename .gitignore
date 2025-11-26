@@ -4,6 +4,7 @@ language-localization/fedorenko10_stimuli
 logs/
 jobs/
 dumps/
+prev-dumps/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
