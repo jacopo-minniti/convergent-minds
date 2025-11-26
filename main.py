@@ -10,7 +10,7 @@ def main():
     parser.add_argument("--untrained", action="store_true", help="Use an untrained version of the model")
     parser.add_argument("--localize", action="store_true", help="Perform localization before scoring")
     parser.add_argument("--num-units", type=int, default=1000, help="Number of units to select during localization")
-    parser.add_argument("--benchmark", default="Pereira2018.384sentences-cka", help="Benchmark identifier")
+    parser.add_argument("--benchmark", default="Pereira2018.384sentences-linear", help="Benchmark identifier")
     parser.add_argument("--device", default="cuda", help="Device to use (cpu, cuda)")
     args = parser.parse_args()
 
