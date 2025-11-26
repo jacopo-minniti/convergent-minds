@@ -76,7 +76,7 @@ class LocalityGPT2Attention(GPT2Attention):
 
 
 class LocalityGPT2(HuggingfaceSubject):
-    def __init__(self, model_id, region_layer_mapping, untrained=False, decay_rate=1.0):
+    def __init__(self, model_id, region_layer_mapping, untrained=False, decay_rate=1.0, **kwargs):
         if untrained:
             config = AutoConfig.from_pretrained(model_id)
             model = AutoModelForCausalLM.from_config(config)
@@ -94,5 +94,6 @@ class LocalityGPT2(HuggingfaceSubject):
         super().__init__(model_id=model_id,
                          region_layer_mapping=region_layer_mapping,
                          model=model,
-                         tokenizer=tokenizer)
+                         tokenizer=tokenizer,
+                         **kwargs)
 

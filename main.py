@@ -3,6 +3,8 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from brainscore import score, load_benchmark, ArtificialSubject
 from brainscore.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
+from models.locality_gpt.model import LocalityGPT2
+import os
 
 def main():
     parser = argparse.ArgumentParser(description="Simple Pipeline for BrainScore")
@@ -12,6 +14,7 @@ def main():
     parser.add_argument("--num-units", type=int, default=1000, help="Number of units to select during localization")
     parser.add_argument("--benchmark", default="Pereira2018.384sentences-linear", help="Benchmark identifier")
     parser.add_argument("--device", default="cuda", help="Device to use (cpu, cuda)")
+    parser.add_argument("--output_dir", default=".", help="Directory to save results")
     args = parser.parse_args()
 
     device = args.device
@@ -26,55 +29,62 @@ def main():
         print("CUDA not available, falling back to CPU")
         device = 'cpu'
 
+    localizer_kwargs = {'num_units': args.num_units}
+
     print(f"Loading model: {args.model} (Untrained: {args.untrained})")
     
-    # Load Model and Tokenizer
-    import os
-    model_path = args.model
-    # Resolve possible paths: absolute, relative, or under 'models/' directory
-    if os.path.isabs(args.model) and os.path.isdir(args.model):
-        model_path = args.model
-    elif os.path.isdir(args.model):
-        model_path = args.model
+    if "locality_gpt" in args.model:
+        base_model_id = "gpt2"
+        layer_names = get_layer_names(base_model_id)
+        subject = LocalityGPT2(
+            model_id=base_model_id,
+            region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
+            untrained=args.untrained,
+            use_localizer=args.localize,
+            localizer_kwargs=localizer_kwargs
+        )
+        subject.model.to(device)
+        subject.model.eval()
     else:
-        # Check if the model exists under the 'models' subdirectory
-        possible_path = os.path.join(os.getcwd(), "models", args.model)
-        if os.path.isdir(possible_path):
-            model_path = possible_path
-        else:
-            # Assume it's a HuggingFace model identifier
+        # Load Model and Tokenizer
+        import os
+        model_path = args.model
+        # Resolve possible paths: absolute, relative, or under 'models/' directory
+        if os.path.isabs(args.model) and os.path.isdir(args.model):
             model_path = args.model
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        elif os.path.isdir(args.model):
+            model_path = args.model
+        else:
+            # Check if the model exists under the 'models' subdirectory
+            possible_path = os.path.join(os.getcwd(), "models", args.model)
+            if os.path.isdir(possible_path):
+                model_path = possible_path
+            else:
+                # Assume it's a HuggingFace model identifier
+                model_path = args.model
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-    if args.untrained:
-        config = AutoConfig.from_pretrained(model_path)
-        model = AutoModelForCausalLM.from_config(config)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_path)
-    
-    model.to(device)
-    model.eval()
+        if args.untrained:
+            config = AutoConfig.from_pretrained(model_path)
+            model = AutoModelForCausalLM.from_config(config)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model_path)
+        
+        model.to(device)
+        model.eval()
 
-    layer_names = get_layer_names(args.model)
-    
-    localizer_kwargs = None
-    if args.localize:
-        localizer_kwargs = {
-            "top_k": args.num_units,
-            "batch_size": 8,
-            "hidden_dim": model.config.hidden_size
-        }
-
-    subject = HuggingfaceSubject(
-        model_id=args.model + ("-untrained" if args.untrained else ""),
-        model=model,
-        tokenizer=tokenizer,
-        region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
-        use_localizer=args.localize,
-        localizer_kwargs=localizer_kwargs
-    )
+        layer_names = get_layer_names(args.model)
+        
+        subject = HuggingfaceSubject(
+            model_id=args.model + ("-untrained" if args.untrained else ""),
+            model=model,
+            tokenizer=tokenizer,
+            region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
+            use_localizer=args.localize,
+            localizer_kwargs=localizer_kwargs
+        )
 
     # Score
     print(f"Loading benchmark: {args.benchmark}")
@@ -83,6 +93,14 @@ def main():
     print("Scoring model...")
     results = score(subject, benchmark)
     print(f"Score: {results}")
+    
+    # Save results
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    
+    save_path = os.path.join(args.output_dir, f"score_{args.model}_{args.benchmark}.nc")
+    results.to_netcdf(save_path)
+    print(f"Results saved to: {save_path}")
 
 if __name__ == "__main__":
     main()
