@@ -142,7 +142,7 @@ def main():
         if args.untrained:
             config = AutoConfig.from_pretrained(model_path)
             _force_eager_attn(config)
-            model = AutoModelForCausalLM.from_config(config)
+            model = AutoModelForCausalLM.from_config(config, attn_implementation="eager")
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 model_path,
