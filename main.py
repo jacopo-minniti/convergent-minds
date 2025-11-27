@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--device", default="cuda", help="Device to use (cpu, cuda)")
     parser.add_argument("--save_path", default=None, help="Directory to save results (overrides --output_dir)")
     parser.add_argument("--decay-rate", type=float, default=1.0, help="Decay rate for LocalityGPT2")
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size for localization")
     args = parser.parse_args()
 
     # Handle save_path logic
@@ -35,12 +36,24 @@ def main():
         print("CUDA not available, falling back to CPU")
         device = 'cpu'
 
-    localizer_kwargs = {'num_units': args.num_units}
-
     print(f"Loading model: {args.model} (Untrained: {args.untrained})")
     
     if "locality_gpt" in args.model:
+        # For LocalityGPT, we need to handle config manually if needed, but it seems it handles itself.
+        # However, we need hidden_dim for localizer_kwargs if we want to be consistent, 
+        # but LocalityGPT might not use the same localizer logic or might handle it internally.
+        # Let's check LocalityGPT init. It takes localizer_kwargs.
+        
         base_model_id = "gpt2"
+        config = AutoConfig.from_pretrained(base_model_id)
+        hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
+        
+        localizer_kwargs = {
+            'top_k': args.num_units,
+            'batch_size': args.batch_size,
+            'hidden_dim': hidden_dim
+        }
+        
         layer_names = get_layer_names(base_model_id)
         subject = LocalityGPT2(
             model_id=base_model_id,
@@ -77,11 +90,19 @@ def main():
             model = AutoModelForCausalLM.from_config(config)
         else:
             model = AutoModelForCausalLM.from_pretrained(model_path)
+            config = model.config
         
         model.to(device)
         model.eval()
 
         layer_names = get_layer_names(args.model)
+        
+        hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
+        localizer_kwargs = {
+            'top_k': args.num_units,
+            'batch_size': args.batch_size,
+            'hidden_dim': hidden_dim
+        }
         
         subject = HuggingfaceSubject(
             model_id=args.model + ("-untrained" if args.untrained else ""),
@@ -208,6 +229,7 @@ def main():
         import seaborn as sns
         import numpy as np
         from scipy.stats import entropy
+        import traceback
         
         # Determine model and tokenizer
         # Try to unwrap if it's a BrainScore subject
@@ -253,10 +275,10 @@ def main():
             print(f"Plotting attention for {len(sentences)} sentences...")
             
             for i, sentence in enumerate(sentences):
-                inputs = tokenizer_obj(sentence, return_tensors="pt").to(device)
-                
-                # Check if model supports output_attentions
                 try:
+                    inputs = tokenizer_obj(sentence, return_tensors="pt").to(device)
+                    
+                    # Check if model supports output_attentions
                     with torch.no_grad():
                         outputs = model_obj(**inputs, output_attentions=True)
                     
@@ -264,6 +286,9 @@ def main():
                         # attentions: tuple of (batch_size, num_heads, sequence_length, sequence_length)
                         # We'll take the last layer, average over heads
                         attentions = outputs.attentions
+                        if attentions[-1] is None:
+                            print("Last layer attention is None. Skipping.")
+                            continue
                         last_layer_attn = attentions[-1][0].cpu().numpy() # (num_heads, seq_len, seq_len)
                         avg_attn = np.mean(last_layer_attn, axis=0) # (seq_len, seq_len)
                         
@@ -301,7 +326,7 @@ def main():
                         
                 except Exception as e:
                     print(f"Error during model forward pass or plotting for sentence '{sentence}': {e}")
-                    # Continue to next sentence or break?
+                    traceback.print_exc()
                     
             print(f"Attention plots saved to: {plot_dir}")
         else:

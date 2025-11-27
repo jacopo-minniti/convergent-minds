@@ -16,5 +16,5 @@ model=gpt2
 
 source .venv/bin/activate
 
-python language-localization/extract_activations.py --model-name $model --seed $seed --embed-agg $embed_agg --overwrite
-python language-localization/localize_fed10.py --model-name $model --seed $seed --embed-agg $embed_agg --num-units $num_units --overwrite
+python localization/extract_activations.py --model-name $model --seed $seed --embed-agg $embed_agg --overwrite
+python localization/localize_fed10.py --model-name $model --seed $seed --embed-agg $embed_agg --num-units $num_units --overwrite
