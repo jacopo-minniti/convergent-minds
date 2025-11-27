@@ -79,9 +79,11 @@ class LocalityGPT2(HuggingfaceSubject):
     def __init__(self, model_id, region_layer_mapping, untrained=False, decay_rate=1.0, **kwargs):
         if untrained:
             config = AutoConfig.from_pretrained(model_id)
+            # SDPA/flash attention cannot return attention weights; force eager for analysis tools.
+            setattr(config, "attn_implementation", "eager")
             model = AutoModelForCausalLM.from_config(config)
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_id)
+            model = AutoModelForCausalLM.from_pretrained(model_id, attn_implementation="eager")
 
         # Replace standard attention layers with our locality-biased version
         for i, layer in enumerate(model.transformer.h):
@@ -96,4 +98,3 @@ class LocalityGPT2(HuggingfaceSubject):
                          model=model,
                          tokenizer=tokenizer,
                          **kwargs)
-

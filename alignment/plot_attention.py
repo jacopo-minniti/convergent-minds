@@ -16,6 +16,19 @@ from brainscore import ArtificialSubject
 
 from models.locality_gpt.model import LocalityGPT2
 
+
+def _force_eager_attn(model_or_config):
+    """
+    Set attn_implementation to 'eager' if the attribute exists.
+    Some HF versions default to 'sdpa' which does not support returning attentions.
+    """
+    if hasattr(model_or_config, "attn_implementation"):
+        try:
+            model_or_config.attn_implementation = "eager"
+        except Exception:
+            pass
+
+
 def _capture_last_attention(model, inputs):
     """
     Fallback for models that do not populate `outputs.attentions` (e.g. custom wrappers
@@ -118,6 +131,7 @@ def main():
         )
         model = subject.model
         tokenizer = subject.tokenizer
+        _force_eager_attn(model.config)
 
     else:
         # Load Standard Model and Tokenizer
@@ -136,7 +150,7 @@ def main():
         # ==============================================================================
         if args.untrained:
             config = AutoConfig.from_pretrained(model_path)
-            config.attn_implementation = "eager"
+            _force_eager_attn(config)
             model = AutoModelForCausalLM.from_config(config)
         else:
             model = AutoModelForCausalLM.from_pretrained(
@@ -144,17 +158,16 @@ def main():
                 attn_implementation="eager"
             )
 
+    _force_eager_attn(model.config)
     model.to(device)
     model.eval()
 
     # Safely attempt to enable output_attentions
-    # If the model (e.g. LocalityGPT2) loaded with SDPA, we cannot set this to True.
     current_impl = getattr(model.config, "attn_implementation", "eager")
-    
     if current_impl == "sdpa":
         print("WARNING: Model is using 'sdpa' (Flash Attention). `output_attentions=True` is not supported.")
         print("Will attempt to capture attention via hooks, but this may fail if the kernel is fused.")
-        model.config.output_attentions = False 
+        model.config.output_attentions = False
     else:
         model.config.output_attentions = True
 
