@@ -5,6 +5,7 @@ logs/
 jobs/
 dumps/
 prev-dumps/
+results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

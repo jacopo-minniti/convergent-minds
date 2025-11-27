@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=alignment
-#SBATCH --account=aip-rudner
 #SBATCH --time=02:00:00
 #SBATCH --gpus-per-node=l40s:1
 #SBATCH --cpus-per-task=8
@@ -17,12 +16,10 @@ module load gcc opencv arrow mpi4py
 
 source .venv/bin/activate
 
-model_name="locality_gpt"
-benchmark_name="Pereira2018.243sentences-linear"
-cuda=0
-
 python main.py \
-    --model "$model_name" \
-    --benchmark "$benchmark_name" \
-    --device "$cuda" \
+    --model gpt2 \
+    --benchmark Pereira2018.243sentences-linear \
+    --save_path results/gpt2_untrained_pereira2018_linear_localized \
+    --num-units 128 \
+    --localize \
     --untrained

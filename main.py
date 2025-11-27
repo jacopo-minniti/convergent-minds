@@ -12,12 +12,11 @@ def main():
     parser.add_argument("--model", default="distilgpt2", help="Model identifier (e.g., distilgpt2, gpt2)")
     parser.add_argument("--untrained", action="store_true", help="Use an untrained version of the model")
     parser.add_argument("--localize", action="store_true", help="Perform localization before scoring")
-    parser.add_argument("--num-units", type=int, default=1000, help="Number of units to select during localization")
+    parser.add_argument("--num-units", type=int, default=256, help="Number of units to select during localization")
     parser.add_argument("--benchmark", default="Pereira2018.384sentences-linear", help="Benchmark identifier")
     parser.add_argument("--device", default="cuda", help="Device to use (cpu, cuda)")
-    parser.add_argument("--output_dir", default=".", help="Directory to save results (deprecated, use --save_path)")
     parser.add_argument("--save_path", default=None, help="Directory to save results (overrides --output_dir)")
-    parser.add_argument("--decay-rate", type=float, default=-0.7, help="Decay rate for LocalityGPT2")
+    parser.add_argument("--decay-rate", type=float, default=1.0, help="Decay rate for LocalityGPT2")
     args = parser.parse_args()
 
     # Handle save_path logic
