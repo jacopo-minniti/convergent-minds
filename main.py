@@ -15,8 +15,14 @@ def main():
     parser.add_argument("--num-units", type=int, default=1000, help="Number of units to select during localization")
     parser.add_argument("--benchmark", default="Pereira2018.384sentences-linear", help="Benchmark identifier")
     parser.add_argument("--device", default="cuda", help="Device to use (cpu, cuda)")
-    parser.add_argument("--output_dir", default=".", help="Directory to save results")
+    parser.add_argument("--output_dir", default=".", help="Directory to save results (deprecated, use --save_path)")
+    parser.add_argument("--save_path", default=None, help="Directory to save results (overrides --output_dir)")
+    parser.add_argument("--decay-rate", type=float, default=-0.7, help="Decay rate for LocalityGPT2")
     args = parser.parse_args()
+
+    # Handle save_path logic
+    if args.save_path:
+        args.output_dir = args.save_path
 
     device = args.device
     # Allow numeric device IDs (e.g., 0) to refer to CUDA if available
@@ -43,7 +49,7 @@ def main():
             untrained=args.untrained,
             use_localizer=args.localize,
             localizer_kwargs=localizer_kwargs, 
-            decay_rate=-0.7
+            decay_rate=args.decay_rate
         )
         subject.model.to(device)
         subject.model.eval()
@@ -95,13 +101,160 @@ def main():
     results = score(subject, benchmark)
     print(f"Score: {results}")
     
-    # Save results
+    # Create output directory
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
+
+    # 1. Fix Serialization Error: Clean attributes
+    # The error "Invalid value for attr 'raw': <xarray.Score ...>" happens because 
+    # complex objects are stored in attrs. We convert them to string or remove them.
+    print("Cleaning results attributes for serialization...")
+    for key, value in list(results.attrs.items()):
+        if not isinstance(value, (str, int, float, list, tuple, type(None))):
+            # Try to convert numpy arrays to list if possible, otherwise stringify
+            try:
+                import numpy as np
+                if isinstance(value, np.ndarray):
+                    continue # ndarray is supported
+            except ImportError:
+                pass
+            
+            print(f"Converting attribute '{key}' of type {type(value)} to string.")
+            try:
+                results.attrs[key] = str(value)
+            except Exception as e:
+                print(f"Failed to convert attribute '{key}': {e}. Removing it.")
+                del results.attrs[key]
+
+    # 2. Save results (NetCDF)
+    save_path_nc = os.path.join(args.output_dir, "score.nc")
+    results.to_netcdf(save_path_nc)
+    print(f"Results saved to: {save_path_nc}")
+
+    # 3. Save info.json
+    import datetime
+    import sys
     
-    save_path = os.path.join(args.output_dir, f"score_{args.model}_{args.benchmark}.nc")
-    results.to_netcdf(save_path)
-    print(f"Results saved to: {save_path}")
+    info = {
+        "model": args.model,
+        "benchmark": args.benchmark,
+        "untrained": args.untrained,
+        "localize": args.localize,
+        "num_units": args.num_units,
+        "device": args.device,
+        "decay_rate": args.decay_rate if "locality_gpt" in args.model else None,
+        "score": float(results.values) if results.values.size == 1 else results.values.tolist(),
+        "timestamp": datetime.datetime.now().isoformat(),
+        "args": vars(args),
+        "command": " ".join(sys.argv)
+    }
+    save_path_json = os.path.join(args.output_dir, "info.json")
+    import json
+    with open(save_path_json, 'w') as f:
+        json.dump(info, f, indent=4)
+    print(f"Run info saved to: {save_path_json}")
+
+    # 4. Save Benchmark Examples (Stimuli)
+    print("Attempting to save benchmark examples...")
+    try:
+        # Try to access stimulus_set from the benchmark
+        # This depends on the specific benchmark implementation in BrainScore
+        stimulus_set = None
+        if hasattr(benchmark, 'stimulus_set'):
+            stimulus_set = benchmark.stimulus_set
+        elif hasattr(benchmark, '_stimulus_set'):
+            stimulus_set = benchmark._stimulus_set
+        
+        if stimulus_set is not None:
+            examples_path = os.path.join(args.output_dir, "benchmark_examples.csv")
+            # stimulus_set is usually a pandas DataFrame-like object
+            if hasattr(stimulus_set, 'to_csv'):
+                stimulus_set.to_csv(examples_path)
+                print(f"Benchmark examples saved to: {examples_path}")
+            else:
+                print(f"Stimulus set found but does not support to_csv: {type(stimulus_set)}")
+        else:
+            print("No stimulus_set found in benchmark object.")
+    except Exception as e:
+        print(f"Failed to save benchmark examples: {e}")
+
+    # 5. Plot Score Distribution (if applicable)
+    if results.size > 1:
+        print("Generating score distribution plot...")
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            
+            plt.figure(figsize=(10, 6))
+            # Flatten results for histogram
+            values = results.values.flatten()
+            sns.histplot(values, kde=True)
+            plt.title(f"Score Distribution - {args.benchmark}")
+            plt.xlabel("Score")
+            plt.ylabel("Count")
+            plt.axvline(x=np.mean(values), color='r', linestyle='--', label=f'Mean: {np.mean(values):.4f}')
+            plt.legend()
+            
+            plot_path = os.path.join(args.output_dir, "score_distribution.png")
+            plt.savefig(plot_path)
+            plt.close()
+            print(f"Score distribution plot saved to: {plot_path}")
+        except Exception as e:
+            print(f"Failed to generate score distribution plot: {e}")
+
+    # 4. Attention Plotting (for locality models)
+    if "locality_gpt" in args.model:
+        print("Generating attention plots...")
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            import numpy as np
+            
+            # Use the underlying model and tokenizer from the subject
+            # The subject wrapper might hide them, but for LocalityGPT2 we know the structure
+            # or we can access them if they are public. 
+            # LocalityGPT2 inherits from HuggingfaceSubject which has .model and .tokenizer
+            
+            plot_dir = os.path.join(args.output_dir, "attention_plots")
+            os.makedirs(plot_dir, exist_ok=True)
+            
+            sentences = [
+                "The quick brown fox jumps over the lazy dog.",
+                "In the beginning God created the heaven and the earth.",
+                "To be, or not to be, that is the question."
+            ]
+            
+            model = subject.model
+            tokenizer = subject.tokenizer
+            
+            for i, sentence in enumerate(sentences):
+                inputs = tokenizer(sentence, return_tensors="pt").to(device)
+                with torch.no_grad():
+                    outputs = model(**inputs, output_attentions=True)
+                
+                # attentions: tuple of (batch_size, num_heads, sequence_length, sequence_length)
+                # We'll take the last layer, average over heads
+                attentions = outputs.attentions
+                last_layer_attn = attentions[-1][0].cpu().numpy() # (num_heads, seq_len, seq_len)
+                avg_attn = np.mean(last_layer_attn, axis=0) # (seq_len, seq_len)
+                
+                tokens = tokenizer.convert_ids_to_tokens(inputs.input_ids[0])
+                
+                plt.figure(figsize=(10, 8))
+                sns.heatmap(avg_attn, xticklabels=tokens, yticklabels=tokens, cmap="viridis")
+                plt.title(f"Avg Attention (Last Layer) - Sentence {i+1}")
+                plt.xlabel("Key")
+                plt.ylabel("Query")
+                plt.tight_layout()
+                plt.savefig(os.path.join(plot_dir, f"attention_sentence_{i+1}.png"))
+                plt.close()
+                
+            print(f"Attention plots saved to: {plot_dir}")
+            
+        except Exception as e:
+            print(f"Failed to generate attention plots: {e}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main()
