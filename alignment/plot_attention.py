@@ -108,11 +108,6 @@ def main():
         base_model_id = "gpt2"
         config = AutoConfig.from_pretrained(base_model_id)
         
-        # NOTE: LocalityGPT2 likely initializes the model internally. 
-        # If LocalityGPT2 source code does not explicitly set attn_implementation="eager",
-        # it might default to "sdpa" on newer PyTorch versions.
-        # Since we can't easily patch the class from here, we will handle the SDPA check later.
-        
         hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
         localizer_kwargs = {
             'top_k': 256,
@@ -144,10 +139,6 @@ def main():
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # ==============================================================================
-        # CRITICAL FIX: Force 'eager' implementation.
-        # SDPA (Flash Attn) does not support returning attention weights.
-        # ==============================================================================
         if args.untrained:
             config = AutoConfig.from_pretrained(model_path)
             _force_eager_attn(config)
