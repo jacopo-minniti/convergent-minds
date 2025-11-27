@@ -20,6 +20,35 @@ try:
 except ImportError:
     LocalityGPT2 = None
 
+
+def _capture_last_attention(model, inputs):
+    """
+    Fallback for models that do not populate `outputs.attentions` (e.g. custom wrappers).
+    Registers a forward hook on the last attention layer to grab its weights.
+    """
+    if not hasattr(model, "transformer") or not hasattr(model.transformer, "h"):
+        return None
+
+    captured = {}
+
+    def hook(_module, _inputs, output):
+        # GPT2Attention returns (attn_output, present, attn_weights) when output_attentions=True
+        if isinstance(output, tuple):
+            if len(output) >= 3:
+                captured["attn"] = output[2]
+            elif len(output) == 2 and output[1] is not None:
+                captured["attn"] = output[1]
+
+    handle = model.transformer.h[-1].attn.register_forward_hook(hook)
+    try:
+        with torch.no_grad():
+            model(**inputs, output_attentions=True)
+    finally:
+        handle.remove()
+
+    return captured.get("attn")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate attention plots for a model")
     parser.add_argument("--model", default="gpt2", help="Model identifier")
@@ -83,6 +112,8 @@ def main():
 
     model.to(device)
     model.eval()
+    # Some wrappers ignore the `output_attentions` flag unless the config is toggled
+    model.config.output_attentions = True
 
     print(f"Processing text: {args.text}")
     inputs = tokenizer(args.text, return_tensors="pt").to(device)
@@ -90,12 +121,18 @@ def main():
     with torch.no_grad():
         outputs = model(**inputs, output_attentions=True)
 
-    if not outputs.attentions:
-        print("Model did not return attentions.")
+    last_layer_attn = None
+    if outputs.attentions and outputs.attentions[-1] is not None:
+        last_layer_attn = outputs.attentions[-1][0]
+    else:
+        last_layer_attn = _capture_last_attention(model, inputs)
+
+    if last_layer_attn is None:
+        print("Model did not return attentions (even after fallback hook).")
         return
 
     # Get last layer attention
-    last_layer_attn = outputs.attentions[-1][0].cpu().numpy() # (num_heads, seq_len, seq_len)
+    last_layer_attn = last_layer_attn.cpu().numpy() # (num_heads, seq_len, seq_len)
     avg_attn = np.mean(last_layer_attn, axis=0) # (seq_len, seq_len)
     
     tokens = tokenizer.convert_ids_to_tokens(inputs.input_ids[0])
