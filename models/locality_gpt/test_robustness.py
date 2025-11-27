@@ -11,6 +11,60 @@ def gpt2_config():
     config.attn_implementation = "eager"
     return config
 
+def _get_last_layer_attention(model, inputs):
+    """
+    Robustly retrieves the attention weights of the last layer.
+    Attempts standard output_attentions first, then falls back to a forward hook
+    if the model (e.g. via SDPA or specific configs) returns None.
+    """
+    # Ensure config requests attentions
+    model.config.output_attentions = True
+    
+    # 1. Try standard forward pass
+    with torch.no_grad():
+        outputs = model(**inputs)
+        if outputs.attentions is not None and len(outputs.attentions) > 0:
+            last_attn = outputs.attentions[-1]
+            if last_attn is not None:
+                return last_attn
+
+    # 2. Fallback: Hook capture
+    # Locate last transformer layer. For GPT2, it's model.transformer.h[-1]
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        last_layer = model.transformer.h[-1]
+    elif hasattr(model, "h"):
+        last_layer = model.h[-1]
+    else:
+        raise ValueError("Could not locate transformer layers for hook capture.")
+
+    # Target the attention module
+    target_module = getattr(last_layer, "attn", getattr(last_layer, "self_attn", None))
+    if target_module is None:
+         raise ValueError("Could not locate attention module in last layer.")
+
+    captured = {}
+    def hook(_module, _inputs, output):
+        # GPT2Attention forward returns: (attn_output, present, attn_weights)
+        # output[2] is attn_weights if present
+        if isinstance(output, tuple):
+            if len(output) >= 3:
+                captured["attn"] = output[2]
+            elif len(output) == 2:
+                # If only 2 returned, it might be (output, present).
+                # This happens if output_attentions=False was effectively passed.
+                pass
+        elif torch.is_tensor(output):
+            pass
+
+    handle = target_module.register_forward_hook(hook)
+    try:
+        with torch.no_grad():
+            model(**inputs)
+    finally:
+        handle.remove()
+
+    return captured.get("attn")
+
 def test_deterministic_behavior(gpt2_config):
     """Test that the model produces deterministic outputs for the same input."""
     model_id = "gpt2"
@@ -25,8 +79,6 @@ def test_deterministic_behavior(gpt2_config):
     subject.model.eval()
     
     input_text = "The quick brown fox"
-    # We need to tokenize manually since subject.tokenizer might not be exposed directly or we want control
-    # But LocalityGPT2 wraps HuggingfaceSubject which has tokenizer
     tokenizer = subject.tokenizer
     inputs = tokenizer(input_text, return_tensors="pt")
     
@@ -37,7 +89,7 @@ def test_deterministic_behavior(gpt2_config):
     torch.testing.assert_close(output1, output2, msg="Model output should be deterministic")
 
 def test_decay_rate_sensitivity(gpt2_config):
-    """Test that changing the decay rate affects the model output."""
+    """Test that changing the decay rate affects the model output and attention weights."""
     model_id = "gpt2"
     dummy_mapping = {'dummy_region': 0}
     input_text = "The quick brown fox jumps over the lazy dog"
@@ -54,19 +106,13 @@ def test_decay_rate_sensitivity(gpt2_config):
     inputs = tokenizer(input_text, return_tensors="pt")
     
     # Model with decay = 2.0 (strong locality)
-    # We must ensure weights are same to compare effect of decay only
-    # But LocalityGPT2 re-initializes model if untrained=True. 
-    # To strictly test decay effect, we should load same weights.
-    # However, for a "robustness" test, just checking they are different is a good start.
-    # If we want to be precise, we can copy weights.
-    
     subject_high = LocalityGPT2(
         model_id,
         region_layer_mapping=dummy_mapping,
         untrained=True,
         decay_rate=2.0
     )
-    # Force weights to match subject_0
+    # Force weights to match subject_0 to isolate decay rate effect
     subject_high.model.load_state_dict(subject_0.model.state_dict())
     subject_high.model.eval()
     
@@ -77,11 +123,13 @@ def test_decay_rate_sensitivity(gpt2_config):
     # They should be different
     assert not torch.allclose(logits_0, logits_high), "Decay rate should affect model output"
     
-    # Check that attention patterns are different
-    with torch.no_grad():
-        attn_0 = subject_0.model(**inputs, output_attentions=True).attentions[-1]
-        attn_high = subject_high.model(**inputs, output_attentions=True).attentions[-1]
-        
+    # Check that attention patterns are different using robust capture
+    attn_0 = _get_last_layer_attention(subject_0.model, inputs)
+    attn_high = _get_last_layer_attention(subject_high.model, inputs)
+    
+    assert attn_0 is not None, "Failed to capture attention for decay=0.0"
+    assert attn_high is not None, "Failed to capture attention for decay=2.0"
+    
     assert not torch.allclose(attn_0, attn_high), "Decay rate should affect attention weights"
 
 def test_untrained_vs_trained_structure():
@@ -105,20 +153,16 @@ def test_untrained_vs_trained_structure():
     assert subject_untrained.model is not None
     assert subject_trained.model is not None
     
-    # Their weights should likely be different (unless by some miracle random init matches pretrained)
-    # We check the first layer's weight
+    # Their weights should likely be different
     w_untrained = subject_untrained.model.transformer.h[0].attn.c_attn.weight
     w_trained = subject_trained.model.transformer.h[0].attn.c_attn.weight
     
     assert not torch.allclose(w_untrained, w_trained), "Untrained model should have different weights from trained model"
 
 def test_score_object_integrity():
-    """Test that the model can be scored (mocked) and returns expected structure."""
-    # This is a bit harder to test without running the full benchmark, 
-    # but we can check if the model forward pass works as expected for 'recording'.
-    
+    """Test that the model subject exposes expected methods for BrainScore."""
     model_id = "gpt2"
-    dummy_mapping = {'language_system': 'transformer.h.0'} # Use a valid layer name
+    dummy_mapping = {'language_system': 'transformer.h.0'}
     
     subject = LocalityGPT2(
         model_id,
@@ -126,19 +170,8 @@ def test_score_object_integrity():
         untrained=True
     )
     
-    # Mock input for BrainScore subject
-    # HuggingfaceSubject expects list of strings usually
-    sentences = ["Hello world", "Testing locality"]
-    
-    # We can't easily mock the whole BrainScore recording process here without dependencies,
-    # but we can ensure the subject exposes the right methods.
     assert hasattr(subject, 'start_neural_recording')
     assert hasattr(subject, 'digest_text')
-    
-    # Basic smoke test for digest_text (if it doesn't require recording to be active)
-    # Usually start_recording is needed.
-    # We'll skip deep integration testing here to avoid mocking hell, 
-    # relying on the other tests for logic correctness.
 
 if __name__ == "__main__":
     pytest.main([__file__])
