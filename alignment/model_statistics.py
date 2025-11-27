@@ -12,11 +12,7 @@ from scipy.stats import entropy
 from brainscore.model_helpers.huggingface import get_layer_names
 from brainscore import ArtificialSubject
 
-# Try to import LocalityGPT2
-try:
-    from models.locality_gpt.model import LocalityGPT2
-except ImportError:
-    LocalityGPT2 = None
+from models.locality_gpt.model import LocalityGPT2
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate useful statistics for a model")

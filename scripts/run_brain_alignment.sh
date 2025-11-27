@@ -19,7 +19,7 @@ source .venv/bin/activate
 python main.py \
     --model locality_gpt \
     --benchmark Pereira2018.243sentences-linear \
-    --save_path results/localized/locality_gpt2_0.3v6_untrained_pereira2018_linear_localized \
+    --save_path results/localized/locality_gpt2_0.3v7_untrained_pereira2018_linear_localized \
     --num-units 128 \
     --decay-rate 0.3 \
     --localize \
