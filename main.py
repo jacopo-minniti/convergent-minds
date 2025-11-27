@@ -1,10 +1,11 @@
+import os
 import argparse
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from brainscore import score, load_benchmark, ArtificialSubject
 from brainscore.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
 from models.locality_gpt.model import LocalityGPT2
-import os
+
 
 def main():
     parser = argparse.ArgumentParser(description="Simple Pipeline for BrainScore")
@@ -41,13 +42,13 @@ def main():
             region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
             untrained=args.untrained,
             use_localizer=args.localize,
-            localizer_kwargs=localizer_kwargs
+            localizer_kwargs=localizer_kwargs, 
+            decay_rate=-0.7
         )
         subject.model.to(device)
         subject.model.eval()
     else:
         # Load Model and Tokenizer
-        import os
         model_path = args.model
         # Resolve possible paths: absolute, relative, or under 'models/' directory
         if os.path.isabs(args.model) and os.path.isdir(args.model):
