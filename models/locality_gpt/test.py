@@ -15,6 +15,7 @@ def gpt2_config():
         n_embd=64
     )
     config.scale_attn_weights = False
+    config.attn_implementation = "eager"
     return config
 
 

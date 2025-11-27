@@ -7,7 +7,9 @@ from .model import LocalityGPT2
 @pytest.fixture(scope="module")
 def gpt2_config():
     """Provides a minimal GPT-2 config for testing."""
-    return AutoConfig.from_pretrained("gpt2", n_layer=2, n_head=2, n_embd=64)
+    config = AutoConfig.from_pretrained("gpt2", n_layer=2, n_head=2, n_embd=64)
+    config.attn_implementation = "eager"
+    return config
 
 def test_deterministic_behavior(gpt2_config):
     """Test that the model produces deterministic outputs for the same input."""
@@ -130,7 +132,7 @@ def test_score_object_integrity():
     
     # We can't easily mock the whole BrainScore recording process here without dependencies,
     # but we can ensure the subject exposes the right methods.
-    assert hasattr(subject, 'start_recording')
+    assert hasattr(subject, 'start_neural_recording')
     assert hasattr(subject, 'digest_text')
     
     # Basic smoke test for digest_text (if it doesn't require recording to be active)

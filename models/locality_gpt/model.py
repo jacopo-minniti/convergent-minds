@@ -29,6 +29,7 @@ class LocalityGPT2Attention(GPT2Attention):
         self.decay_rate = decay_rate
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
+        print(f"DEBUG: _attn called with decay_rate={self.decay_rate}")
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
         if self.scale_attn_weights:
