@@ -14,35 +14,57 @@ from scipy.stats import entropy
 from brainscore.model_helpers.huggingface import get_layer_names
 from brainscore import ArtificialSubject
 
-# Try to import LocalityGPT2
-try:
-    from models.locality_gpt.model import LocalityGPT2
-except ImportError:
-    LocalityGPT2 = None
-
+from models.locality_gpt.model import LocalityGPT2
 
 def _capture_last_attention(model, inputs):
     """
-    Fallback for models that do not populate `outputs.attentions` (e.g. custom wrappers).
+    Fallback for models that do not populate `outputs.attentions` (e.g. custom wrappers
+    or models forced into SDPA mode).
     Registers a forward hook on the last attention layer to grab its weights.
     """
-    if not hasattr(model, "transformer") or not hasattr(model.transformer, "h"):
+    # Attempt to locate the last transformer block. 
+    # GPT-2 usually uses model.transformer.h
+    blocks = None
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        blocks = model.transformer.h
+    elif hasattr(model, "h"): # Sometimes directly on model
+        blocks = model.h
+    elif hasattr(model, "model") and hasattr(model.model, "layers"): # Llama/Mistral style
+        blocks = model.model.layers
+    
+    if blocks is None:
         return None
 
     captured = {}
 
     def hook(_module, _inputs, output):
         # GPT2Attention returns (attn_output, present, attn_weights) when output_attentions=True
+        # Some implementations return just one tensor.
         if isinstance(output, tuple):
             if len(output) >= 3:
                 captured["attn"] = output[2]
             elif len(output) == 2 and output[1] is not None:
                 captured["attn"] = output[1]
+        elif torch.is_tensor(output):
+             # If the layer outputs just the tensor, we might need a different strategy,
+             # but usually HF layers return tuples.
+             pass
 
-    handle = model.transformer.h[-1].attn.register_forward_hook(hook)
+    # Register hook on the last layer's attention mechanism
+    # Note: Structure depends on model architecture. GPT2 is .attn
+    last_layer = blocks[-1]
+    target_module = getattr(last_layer, "attn", getattr(last_layer, "self_attn", None))
+    
+    if target_module is None:
+        return None
+
+    handle = target_module.register_forward_hook(hook)
     try:
         with torch.no_grad():
-            model(**inputs, output_attentions=True)
+            # We don't ask for output_attentions here because the hook captures internal state
+            model(**inputs)
+    except Exception as e:
+        print(f"Hook capture failed: {e}")
     finally:
         handle.remove()
 
@@ -72,10 +94,13 @@ def main():
         print("Initializing LocalityGPT2...")
         base_model_id = "gpt2"
         config = AutoConfig.from_pretrained(base_model_id)
-        hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
         
-        # Dummy localizer kwargs as we might not need full localization for plotting attention
-        # but the class might expect them.
+        # NOTE: LocalityGPT2 likely initializes the model internally. 
+        # If LocalityGPT2 source code does not explicitly set attn_implementation="eager",
+        # it might default to "sdpa" on newer PyTorch versions.
+        # Since we can't easily patch the class from here, we will handle the SDPA check later.
+        
+        hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
         localizer_kwargs = {
             'top_k': 256,
             'batch_size': 16,
@@ -87,14 +112,15 @@ def main():
             model_id=base_model_id,
             region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
             untrained=args.untrained,
-            use_localizer=False, # We probably don't need localization for just plotting attention
+            use_localizer=False, 
             localizer_kwargs=localizer_kwargs, 
             decay_rate=args.decay_rate
         )
         model = subject.model
         tokenizer = subject.tokenizer
+
     else:
-        # Load Model and Tokenizer
+        # Load Standard Model and Tokenizer
         if os.path.isdir(args.model):
             model_path = args.model
         else:
@@ -104,51 +130,79 @@ def main():
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        # ==============================================================================
+        # CRITICAL FIX: Force 'eager' implementation.
+        # SDPA (Flash Attn) does not support returning attention weights.
+        # ==============================================================================
         if args.untrained:
             config = AutoConfig.from_pretrained(model_path)
+            config.attn_implementation = "eager"
             model = AutoModelForCausalLM.from_config(config)
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_path)
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                attn_implementation="eager"
+            )
 
     model.to(device)
     model.eval()
-    # Some wrappers ignore the `output_attentions` flag unless the config is toggled.
-    # When using SDPA attention HF forbids returning attentions, so switch to eager first.
-    attn_impl = getattr(model.config, "attn_implementation", None)
-    if attn_impl == "sdpa":
-        model.config.attn_implementation = "eager"
-    try:
+
+    # Safely attempt to enable output_attentions
+    # If the model (e.g. LocalityGPT2) loaded with SDPA, we cannot set this to True.
+    current_impl = getattr(model.config, "attn_implementation", "eager")
+    
+    if current_impl == "sdpa":
+        print("WARNING: Model is using 'sdpa' (Flash Attention). `output_attentions=True` is not supported.")
+        print("Will attempt to capture attention via hooks, but this may fail if the kernel is fused.")
+        model.config.output_attentions = False 
+    else:
         model.config.output_attentions = True
-    except ValueError as e:
-        if "attn_implementation" in str(e) and attn_impl != "eager":
-            model.config.attn_implementation = "eager"
-            model.config.output_attentions = True
-        else:
-            raise
 
     print(f"Processing text: {args.text}")
     inputs = tokenizer(args.text, return_tensors="pt").to(device)
     
-    with torch.no_grad():
-        outputs = model(**inputs, output_attentions=True)
-
     last_layer_attn = None
-    if outputs.attentions and outputs.attentions[-1] is not None:
-        last_layer_attn = outputs.attentions[-1][0]
-    else:
+    
+    # Forward pass
+    with torch.no_grad():
+        if model.config.output_attentions:
+            outputs = model(**inputs)
+            if outputs.attentions and outputs.attentions[-1] is not None:
+                last_layer_attn = outputs.attentions[-1][0]
+        else:
+            # If output_attentions is False (or SDPA forced), try the fallback hook
+            pass
+
+    # If we didn't get attentions from the standard output, try the fallback hook
+    if last_layer_attn is None:
+        print("Standard output_attentions failed or disabled. Attempting hook capture...")
         last_layer_attn = _capture_last_attention(model, inputs)
 
     if last_layer_attn is None:
-        print("Model did not return attentions (even after fallback hook).")
+        print("Error: Could not capture attention weights.")
+        if current_impl == "sdpa":
+            print("Tip: If using LocalityGPT2, edit the class to load the base model with `attn_implementation='eager'`.")
         return
 
-    # Get last layer attention
-    last_layer_attn = last_layer_attn.cpu().numpy() # (num_heads, seq_len, seq_len)
+    # Process Attention Weights
+    # Ensure it's on CPU and numpy
+    if isinstance(last_layer_attn, torch.Tensor):
+        last_layer_attn = last_layer_attn.detach().cpu().numpy() 
+    
+    # Expected shape: (num_heads, seq_len, seq_len)
+    if len(last_layer_attn.shape) == 4: 
+        # Sometimes (batch, heads, seq, seq)
+        last_layer_attn = last_layer_attn[0]
+        
     avg_attn = np.mean(last_layer_attn, axis=0) # (seq_len, seq_len)
     
     tokens = tokenizer.convert_ids_to_tokens(inputs.input_ids[0])
+    # Clean up GPT2 tokens (replace Ġ with space)
+    tokens = [t.replace('Ġ', ' ') for t in tokens]
     
     # Calculate Entropy
+    # Add epsilon to avoid log(0)
+    avg_attn = np.maximum(avg_attn, 1e-9)
     attn_entropy = entropy(avg_attn, axis=1)
     mean_entropy = np.mean(attn_entropy)
     
