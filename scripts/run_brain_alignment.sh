@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=alignment
-#SBATCH --time=02:00:00
+#SBATCH --time=00:30:00
 #SBATCH --gpus-per-node=l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=5G
@@ -17,9 +17,10 @@ module load gcc opencv arrow mpi4py
 source .venv/bin/activate
 
 python main.py \
-    --model gpt2 \
+    --model locality_gpt \
     --benchmark Pereira2018.243sentences-linear \
-    --save_path results/gpt2_untrained_pereira2018_linear_localized \
+    --save_path results/localized/locality_gpt2_0.3v6_untrained_pereira2018_linear_localized \
     --num-units 128 \
+    --decay-rate 0.3 \
     --localize \
     --untrained

@@ -12,7 +12,7 @@ def main():
     parser.add_argument("--model", default="gpt2", help="Model identifier")
     parser.add_argument("--untrained", action="store_true", help="Use untrained model")
     parser.add_argument("--text", default="The quick brown fox jumps over the lazy dog.", help="Text to analyze")
-    parser.add_argument("--output_dir", default="alignment_plots", help="Directory to save plots")
+    parser.add_argument("--output_dir", default="results", help="Directory to save plots")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="Device")
     args = parser.parse_args()
 
