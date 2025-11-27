@@ -112,8 +112,19 @@ def main():
 
     model.to(device)
     model.eval()
-    # Some wrappers ignore the `output_attentions` flag unless the config is toggled
-    model.config.output_attentions = True
+    # Some wrappers ignore the `output_attentions` flag unless the config is toggled.
+    # When using SDPA attention HF forbids returning attentions, so switch to eager first.
+    attn_impl = getattr(model.config, "attn_implementation", None)
+    if attn_impl == "sdpa":
+        model.config.attn_implementation = "eager"
+    try:
+        model.config.output_attentions = True
+    except ValueError as e:
+        if "attn_implementation" in str(e) and attn_impl != "eager":
+            model.config.attn_implementation = "eager"
+            model.config.output_attentions = True
+        else:
+            raise
 
     print(f"Processing text: {args.text}")
     inputs = tokenizer(args.text, return_tensors="pt").to(device)
