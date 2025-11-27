@@ -202,59 +202,116 @@ def main():
         except Exception as e:
             print(f"Failed to generate score distribution plot: {e}")
 
-    # 4. Attention Plotting (for locality models)
-    if "locality_gpt" in args.model:
-        print("Generating attention plots...")
-        try:
-            import matplotlib.pyplot as plt
-            import seaborn as sns
-            import numpy as np
+    # 6. Generalized Attention Plotting & Metrics
+    print("Generating attention plots and metrics...")
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        import numpy as np
+        from scipy.stats import entropy
+        
+        # Determine model and tokenizer
+        # Try to unwrap if it's a BrainScore subject
+        model_obj = None
+        tokenizer_obj = None
+        
+        if hasattr(subject, 'model'):
+            model_obj = subject.model
+        if hasattr(subject, 'tokenizer'):
+            tokenizer_obj = subject.tokenizer
             
-            # Use the underlying model and tokenizer from the subject
-            # The subject wrapper might hide them, but for LocalityGPT2 we know the structure
-            # or we can access them if they are public. 
-            # LocalityGPT2 inherits from HuggingfaceSubject which has .model and .tokenizer
-            
+        # If not found, check if we can access them from the args (for standard HF loading)
+        if model_obj is None and 'model' in locals():
+             model_obj = model
+        if tokenizer_obj is None and 'tokenizer' in locals():
+             tokenizer_obj = tokenizer
+
+        if model_obj is not None and tokenizer_obj is not None:
             plot_dir = os.path.join(args.output_dir, "attention_plots")
             os.makedirs(plot_dir, exist_ok=True)
             
-            sentences = [
-                "The quick brown fox jumps over the lazy dog.",
-                "In the beginning God created the heaven and the earth.",
-                "To be, or not to be, that is the question."
-            ]
+            # Select sentences: use benchmark stimuli if available, else default
+            sentences = []
+            if hasattr(benchmark, 'stimulus_set') and hasattr(benchmark.stimulus_set, 'sentence'):
+                 # Sample 3 random sentences
+                 all_sentences = benchmark.stimulus_set['sentence'].tolist()
+                 if len(all_sentences) > 0:
+                     import random
+                     sentences = random.sample(all_sentences, min(3, len(all_sentences)))
             
-            model = subject.model
-            tokenizer = subject.tokenizer
+            if not sentences:
+                sentences = [
+                    "The quick brown fox jumps over the lazy dog.",
+                    "In the beginning God created the heaven and the earth.",
+                    "To be, or not to be, that is the question."
+                ]
+            
+            # Save sampled sentences
+            with open(os.path.join(plot_dir, "sampled_sentences.txt"), "w") as f:
+                for s in sentences:
+                    f.write(f"{s}\n")
+
+            print(f"Plotting attention for {len(sentences)} sentences...")
             
             for i, sentence in enumerate(sentences):
-                inputs = tokenizer(sentence, return_tensors="pt").to(device)
-                with torch.no_grad():
-                    outputs = model(**inputs, output_attentions=True)
+                inputs = tokenizer_obj(sentence, return_tensors="pt").to(device)
                 
-                # attentions: tuple of (batch_size, num_heads, sequence_length, sequence_length)
-                # We'll take the last layer, average over heads
-                attentions = outputs.attentions
-                last_layer_attn = attentions[-1][0].cpu().numpy() # (num_heads, seq_len, seq_len)
-                avg_attn = np.mean(last_layer_attn, axis=0) # (seq_len, seq_len)
-                
-                tokens = tokenizer.convert_ids_to_tokens(inputs.input_ids[0])
-                
-                plt.figure(figsize=(10, 8))
-                sns.heatmap(avg_attn, xticklabels=tokens, yticklabels=tokens, cmap="viridis")
-                plt.title(f"Avg Attention (Last Layer) - Sentence {i+1}")
-                plt.xlabel("Key")
-                plt.ylabel("Query")
-                plt.tight_layout()
-                plt.savefig(os.path.join(plot_dir, f"attention_sentence_{i+1}.png"))
-                plt.close()
-                
+                # Check if model supports output_attentions
+                try:
+                    with torch.no_grad():
+                        outputs = model_obj(**inputs, output_attentions=True)
+                    
+                    if hasattr(outputs, 'attentions') and outputs.attentions:
+                        # attentions: tuple of (batch_size, num_heads, sequence_length, sequence_length)
+                        # We'll take the last layer, average over heads
+                        attentions = outputs.attentions
+                        last_layer_attn = attentions[-1][0].cpu().numpy() # (num_heads, seq_len, seq_len)
+                        avg_attn = np.mean(last_layer_attn, axis=0) # (seq_len, seq_len)
+                        
+                        # Calculate Entropy
+                        # Entropy of attention distribution for each query token (row)
+                        # We use base e (natural logarithm)
+                        attn_entropy = entropy(avg_attn, axis=1)
+                        mean_entropy = np.mean(attn_entropy)
+                        
+                        tokens = tokenizer_obj.convert_ids_to_tokens(inputs.input_ids[0])
+                        
+                        # Plot Heatmap
+                        plt.figure(figsize=(10, 8))
+                        sns.heatmap(avg_attn, xticklabels=tokens, yticklabels=tokens, cmap="viridis")
+                        plt.title(f"Avg Attention (Last Layer) - Sentence {i+1}\nMean Entropy: {mean_entropy:.4f}")
+                        plt.xlabel("Key")
+                        plt.ylabel("Query")
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(plot_dir, f"attention_sentence_{i+1}.png"))
+                        plt.close()
+                        
+                        # Plot Entropy per token
+                        plt.figure(figsize=(10, 4))
+                        plt.bar(range(len(tokens)), attn_entropy)
+                        plt.xticks(range(len(tokens)), tokens, rotation=45, ha="right")
+                        plt.title(f"Attention Entropy per Token - Sentence {i+1}")
+                        plt.ylabel("Entropy")
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(plot_dir, f"entropy_sentence_{i+1}.png"))
+                        plt.close()
+
+                    else:
+                        print("Model output does not contain 'attentions'. Skipping plots.")
+                        break # No need to try other sentences
+                        
+                except Exception as e:
+                    print(f"Error during model forward pass or plotting for sentence '{sentence}': {e}")
+                    # Continue to next sentence or break?
+                    
             print(f"Attention plots saved to: {plot_dir}")
+        else:
+            print("Could not access model or tokenizer object. Skipping attention plots.")
             
-        except Exception as e:
-            print(f"Failed to generate attention plots: {e}")
-            import traceback
-            traceback.print_exc()
+    except Exception as e:
+        print(f"Failed to generate attention plots: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()

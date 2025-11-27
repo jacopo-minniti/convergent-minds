@@ -146,6 +146,10 @@ def test_plotting_logic():
             last_layer_attn = attentions[-1][0].cpu().numpy()
             avg_attn = np.mean(last_layer_attn, axis=0)
             
+            # Entropy check
+            from scipy.stats import entropy
+            attn_entropy = entropy(avg_attn, axis=1)
+            
             tokens = tokenizer.convert_ids_to_tokens(inputs.input_ids[0])
             
             plt.figure(figsize=(10, 8))
@@ -154,11 +158,18 @@ def test_plotting_logic():
             plt.savefig(os.path.join(plot_dir, f"attention_sentence_{i+1}.png"))
             plt.close()
             
-        if os.path.exists(os.path.join(plot_dir, "attention_sentence_1.png")):
-            print("Successfully generated attention plot")
+            # Entropy plot
+            plt.figure(figsize=(10, 4))
+            plt.bar(range(len(tokens)), attn_entropy)
+            plt.savefig(os.path.join(plot_dir, f"entropy_sentence_{i+1}.png"))
+            plt.close()
+            
+        if os.path.exists(os.path.join(plot_dir, "attention_sentence_1.png")) and \
+           os.path.exists(os.path.join(plot_dir, "entropy_sentence_1.png")):
+            print("Successfully generated attention and entropy plots")
             return True
         else:
-            print("Failed to generate plot file")
+            print("Failed to generate plot files")
             return False
             
     except Exception as e:
