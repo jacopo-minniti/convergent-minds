@@ -14,13 +14,17 @@ module load python/3.11.5
 module load cuda/12.6 cudnn
 module load gcc opencv arrow mpi4py
 
+export CUDA_LAUNCH_BLOCKING=1
 source .venv/bin/activate
 
 python main.py \
     --model locality_gpt \
     --benchmark Pereira2018.243sentences-linear \
-    --save_path results/localized/locality_gpt2_0.3v7_untrained_pereira2018_linear_localized \
+    --save_path results/localized/locality_gpt2/v2_untrained_pereira2018_linear_0.3 \
     --num-units 128 \
     --decay-rate 0.3 \
     --localize \
     --untrained
+
+# pytest models/locality_gpt/test_robustness.py
+# python alignment/plot_attention.py --untrained --model locality_gpt
