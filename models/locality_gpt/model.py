@@ -38,8 +38,11 @@ class LocalityGPT2Attention(GPT2Attention):
         head_mask=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
+        past_key_value=None,
+        cache_position=None,
         use_cache=False,
         output_attentions=False,
+        **kwargs,
     ):
         """
         Override to bypass SDPA/flash dispatch and always use our custom `_attn`
@@ -54,10 +57,14 @@ class LocalityGPT2Attention(GPT2Attention):
                 head_mask=head_mask,
                 encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
+                past_key_value=past_key_value,
+                cache_position=cache_position,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
+                **kwargs,
             )
 
+        layer_past = layer_past if layer_past is not None else past_key_value
         # Self-attention path with enforced eager attention
         query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
 
@@ -78,7 +85,8 @@ class LocalityGPT2Attention(GPT2Attention):
         attn_output = self.c_proj(attn_output)
         attn_output = self.resid_dropout(attn_output)
 
-        outputs = (attn_output, (key, value)) if use_cache else (attn_output, None)
+        present = (key, value)
+        outputs = (attn_output, present) if use_cache else (attn_output, None)
         if output_attentions:
             outputs += (attn_weights,)
         return outputs
