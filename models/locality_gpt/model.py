@@ -30,6 +30,59 @@ class LocalityGPT2Attention(GPT2Attention):
         # Force eager attention so our custom _attn is always used (avoids SDPA/flash paths).
         self.attn_implementation = "eager"
 
+    def forward(
+        self,
+        hidden_states,
+        layer_past=None,
+        attention_mask=None,
+        head_mask=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        use_cache=False,
+        output_attentions=False,
+    ):
+        """
+        Override to bypass SDPA/flash dispatch and always use our custom `_attn`
+        (which applies the decay mask). Cross-attention falls back to the
+        parent implementation to keep that pathway intact.
+        """
+        if encoder_hidden_states is not None or self.is_cross_attention:
+            return super().forward(
+                hidden_states,
+                layer_past=layer_past,
+                attention_mask=attention_mask,
+                head_mask=head_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+            )
+
+        # Self-attention path with enforced eager attention
+        query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
+
+        query = self._split_heads(query, self.num_heads, self.head_dim)
+        key = self._split_heads(key, self.num_heads, self.head_dim)
+        value = self._split_heads(value, self.num_heads, self.head_dim)
+
+        if layer_past is not None:
+            past_key, past_value = layer_past
+            key = torch.cat((past_key, key), dim=-2)
+            value = torch.cat((past_value, value), dim=-2)
+
+        attn_output, attn_weights = self._attn(
+            query, key, value, attention_mask, head_mask
+        )
+
+        attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
+        attn_output = self.c_proj(attn_output)
+        attn_output = self.resid_dropout(attn_output)
+
+        outputs = (attn_output, (key, value)) if use_cache else (attn_output, None)
+        if output_attentions:
+            outputs += (attn_weights,)
+        return outputs
+
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
         print(f"DEBUG: _attn called with decay_rate={self.decay_rate}")
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
