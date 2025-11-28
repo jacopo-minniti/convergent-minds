@@ -80,7 +80,7 @@ def test_deterministic_behavior(gpt2_config):
     
     input_text = "The quick brown fox"
     tokenizer = subject.tokenizer
-    inputs = tokenizer(input_text, return_tensors="pt")
+    inputs = tokenizer(input_text, return_tensors="pt").to(subject.device)
     
     with torch.no_grad():
         output1 = subject.model(**inputs).logits
@@ -103,7 +103,7 @@ def test_decay_rate_sensitivity(gpt2_config):
     )
     subject_0.model.eval()
     tokenizer = subject_0.tokenizer
-    inputs = tokenizer(input_text, return_tensors="pt")
+    inputs = tokenizer(input_text, return_tensors="pt").to(subject_0.device)
     
     # Model with decay = 2.0 (strong locality)
     subject_high = LocalityGPT2(
