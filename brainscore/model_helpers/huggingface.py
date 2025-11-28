@@ -95,6 +95,7 @@ class HuggingfaceSubject(ArtificialSubject):
             tokenizer=None,
             use_localizer=False,
             localizer_kwargs=None,
+            device: str = None,
             task_heads: Union[None, Dict[ArtificialSubject.Task, Callable]] = None,
     ):
         """
@@ -103,6 +104,7 @@ class HuggingfaceSubject(ArtificialSubject):
                 This can be left empty, but the model will not be able to be tested on neural benchmarks
             :param model: the model to run inference from. Using `AutoModelForCausalLM.from_pretrained` if `None`.
             :param tokenizer: the model's associated tokenizer. Using `AutoTokenizer.from_pretrained` if `None`.
+            :param device: override for compute device (e.g., "cpu" to avoid faulty GPUs). Defaults to CUDA if available.
             :param task_heads: a mapping from one or multiple tasks
                 (:class:`~brainscore.artificial_subject.ArtificialSubject.Task`) to a function outputting the
                 requested task output, given the basemodel's base output
@@ -113,7 +115,7 @@ class HuggingfaceSubject(ArtificialSubject):
         self.use_localizer = use_localizer
         self.region_layer_mapping = region_layer_mapping
         self.basemodel = (model if model is not None else AutoModelForCausalLM.from_pretrained(self.model_id))
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = device if device is not None else ('cuda' if torch.cuda.is_available() else 'cpu')
         self.basemodel.to(self.device)
         self.model = self.basemodel
         self.tokenizer = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(self.model_id,

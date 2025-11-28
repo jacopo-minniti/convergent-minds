@@ -69,12 +69,13 @@ def test_deterministic_behavior(gpt2_config):
     """Test that the model produces deterministic outputs for the same input."""
     model_id = "gpt2"
     dummy_mapping = {'dummy_region': 0}
-    
+
     subject = LocalityGPT2(
         model_id,
         region_layer_mapping=dummy_mapping,
         untrained=True, # Use untrained for speed/independence
-        decay_rate=1.0
+        decay_rate=1.0,
+        device="cpu"
     )
     subject.model.eval()
     
@@ -99,7 +100,8 @@ def test_decay_rate_sensitivity(gpt2_config):
         model_id,
         region_layer_mapping=dummy_mapping,
         untrained=True,
-        decay_rate=0.0
+        decay_rate=0.0,
+        device="cpu"
     )
     subject_0.model.eval()
     tokenizer = subject_0.tokenizer
@@ -110,7 +112,8 @@ def test_decay_rate_sensitivity(gpt2_config):
         model_id,
         region_layer_mapping=dummy_mapping,
         untrained=True,
-        decay_rate=2.0
+        decay_rate=2.0,
+        device="cpu"
     )
     # Force weights to match subject_0 to isolate decay rate effect
     subject_high.model.load_state_dict(subject_0.model.state_dict())
@@ -140,7 +143,8 @@ def test_untrained_vs_trained_structure():
     subject_untrained = LocalityGPT2(
         model_id,
         region_layer_mapping=dummy_mapping,
-        untrained=True
+        untrained=True,
+        device="cpu"
     )
     
     subject_trained = LocalityGPT2(
@@ -167,7 +171,8 @@ def test_score_object_integrity():
     subject = LocalityGPT2(
         model_id,
         region_layer_mapping=dummy_mapping,
-        untrained=True
+        untrained=True,
+        device="cpu"
     )
     
     assert hasattr(subject, 'start_neural_recording')

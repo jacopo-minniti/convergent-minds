@@ -91,6 +91,18 @@ class LocalityGPT2Attention(GPT2Attention):
             outputs += (attn_weights,)
         return outputs
 
+    def _split_heads(self, tensor, num_heads, attn_head_size):
+        """Copy of GPT2Attention._split_heads to avoid missing attribute across HF versions."""
+        batch_size, seq_length, hidden_size = tensor.size()
+        tensor = tensor.view(batch_size, seq_length, num_heads, attn_head_size)
+        return tensor.permute(0, 2, 1, 3)  # (batch, head, seq, head_dim)
+
+    def _merge_heads(self, tensor, num_heads, attn_head_size):
+        """Copy of GPT2Attention._merge_heads to avoid missing attribute across HF versions."""
+        batch_size, num_heads_, seq_length, head_dim = tensor.size()
+        tensor = tensor.permute(0, 2, 1, 3).contiguous()
+        return tensor.view(batch_size, seq_length, num_heads_ * head_dim)
+
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
         print(f"DEBUG: _attn called with decay_rate={self.decay_rate}")
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
@@ -140,7 +152,7 @@ class LocalityGPT2Attention(GPT2Attention):
 
 
 class LocalityGPT2(HuggingfaceSubject):
-    def __init__(self, model_id, region_layer_mapping, untrained=False, decay_rate=1.0, **kwargs):
+    def __init__(self, model_id, region_layer_mapping, untrained=False, decay_rate=1.0, device=None, **kwargs):
         if untrained:
             config = AutoConfig.from_pretrained(model_id)
             # SDPA/flash attention cannot return attention weights; force eager for analysis tools.
@@ -167,4 +179,5 @@ class LocalityGPT2(HuggingfaceSubject):
                          region_layer_mapping=region_layer_mapping,
                          model=model,
                          tokenizer=tokenizer,
+                         device=device,
                          **kwargs)
