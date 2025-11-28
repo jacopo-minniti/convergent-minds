@@ -27,6 +27,8 @@ class LocalityGPT2Attention(GPT2Attention):
         """
         super().__init__(config, is_cross_attention=is_cross_attention, layer_idx=layer_idx)
         self.decay_rate = decay_rate
+        # Force eager attention so our custom _attn is always used (avoids SDPA/flash paths).
+        self.attn_implementation = "eager"
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
         print(f"DEBUG: _attn called with decay_rate={self.decay_rate}")
@@ -82,9 +84,15 @@ class LocalityGPT2(HuggingfaceSubject):
             config = AutoConfig.from_pretrained(model_id)
             # SDPA/flash attention cannot return attention weights; force eager for analysis tools.
             setattr(config, "attn_implementation", "eager")
+            setattr(config, "_attn_implementation", "eager")
             model = AutoModelForCausalLM.from_config(config)
         else:
             model = AutoModelForCausalLM.from_pretrained(model_id, attn_implementation="eager")
+
+        # Ensure the model config itself reflects eager attention
+        if hasattr(model, "config"):
+            setattr(model.config, "attn_implementation", "eager")
+            setattr(model.config, "_attn_implementation", "eager")
 
         # Replace standard attention layers with our locality-biased version
         for i, layer in enumerate(model.transformer.h):
