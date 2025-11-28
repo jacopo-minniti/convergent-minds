@@ -161,7 +161,7 @@ def test_untrained_vs_trained_structure():
     w_untrained = subject_untrained.model.transformer.h[0].attn.c_attn.weight
     w_trained = subject_trained.model.transformer.h[0].attn.c_attn.weight
     
-    assert not torch.allclose(w_untrained, w_trained), "Untrained model should have different weights from trained model"
+    assert not torch.allclose(w_untrained.cpu(), w_trained.cpu()), "Untrained model should have different weights from trained model"
 
 def test_score_object_integrity():
     """Test that the model subject exposes expected methods for BrainScore."""

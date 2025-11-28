@@ -85,10 +85,8 @@ class LocalityGPT2Attention(GPT2Attention):
         attn_output = self.c_proj(attn_output)
         attn_output = self.resid_dropout(attn_output)
 
-        present = (key, value)
-        outputs = (attn_output, present) if use_cache else (attn_output, None)
-        if output_attentions:
-            outputs += (attn_weights,)
+        # Align return signature with GPT2Block expectations: (attn_output, attn_weights_or_none)
+        outputs = (attn_output, attn_weights if output_attentions else None)
         return outputs
 
     def _split_heads(self, tensor, num_heads, attn_head_size):
