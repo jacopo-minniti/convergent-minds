@@ -2,7 +2,7 @@ import os
 import argparse
 import numpy as np
 import logging
-from brainscore.benchmarks import load_benchmark
+from brainscore import load_benchmark
 from alignment.objective_features import compute_objective_features
 
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +15,7 @@ def main():
     args = parser.parse_args()
 
     logger.info(f"Loading benchmark: {args.benchmark}")
+    benchmark = load_benchmark(args.benchmark)
     # Use .data as per benchmark implementation
     assembly = benchmark.data
     
