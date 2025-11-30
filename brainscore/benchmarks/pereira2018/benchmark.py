@@ -148,3 +148,150 @@ class _Pereira2018Experiment(BenchmarkBase):
         predictions = xr.concat(predictions, dim='presentation')
         raw_score = self.metric(predictions, self.data)
         return raw_score
+
+
+def Pereira2018_243sentences_partialr2():
+    return _Pereira2018ExperimentPartialR2(experiment='243sentences')
+
+
+def Pereira2018_384sentences_partialr2():
+    return _Pereira2018ExperimentPartialR2(experiment='384sentences')
+
+
+class _Pereira2018ExperimentPartialR2(BenchmarkBase):
+    """
+    Evaluate model ability to predict neural activity in the human language system in response to natural sentences,
+    recorded by Pereira et al. 2018.
+    Alignment is evaluated via Partial R2 with objective features.
+    """
+
+    def __init__(self, experiment: str):
+        self.data = self._load_data(experiment)
+        from alignment.metrics.linear_partial_r2 import linear_partial_r2
+        self.metric = linear_partial_r2
+        identifier = f'Pereira2018.{experiment}-partialr2'
+        self.experiment = experiment
+        super(_Pereira2018ExperimentPartialR2, self).__init__(
+            identifier=identifier,
+            version=1,
+            parent=f'Pereira2018-partialr2',
+            ceiling=None,
+            bibtex=BIBTEX)
+
+    def _load_data(self, experiment: str) -> NeuroidAssembly:
+        data = load_dataset('Pereira2018.language')
+        data = data.sel(experiment=experiment)  # filter experiment
+        data = data.dropna('neuroid')  # not all subjects have done both experiments, drop those that haven't
+        data.attrs['identifier'] = f"{data.identifier}.{experiment}"
+        return data
+
+    def __call__(self, candidate: ArtificialSubject) -> Score:
+        candidate.start_neural_recording(recording_target=ArtificialSubject.RecordingTarget.language_system,
+                                         recording_type=ArtificialSubject.RecordingType.fMRI)
+        stimuli = self.data['stimulus']
+        passages = self.data['passage_label'].values
+        predictions = []
+        for passage in sorted(set(passages)):  # go over individual passages, sorting to keep consistency across runs
+            passage_indexer = [stimulus_passage == passage for stimulus_passage in passages]
+            passage_stimuli = stimuli[passage_indexer]
+            passage_predictions = candidate.digest_text(passage_stimuli.values)['neural']
+            passage_predictions['stimulus_id'] = 'presentation', passage_stimuli['stimulus_id'].values
+            predictions.append(passage_predictions)
+        predictions = xr.concat(predictions, dim='presentation')
+        
+        # Load X_obj
+        import os
+        import numpy as np
+        # Assuming data is in 'data/' relative to CWD
+        # Filename convention from precompute script: pereira2018_{experiment}_obj.npz
+        # e.g. pereira2018_243_obj.npz
+        filename = f"pereira2018_{self.experiment.replace('sentences', '')}_obj.npz"
+        filepath = os.path.join("data", filename)
+        
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Objective features file not found at {filepath}. Please run precompute script.")
+            
+        data_obj = np.load(filepath)
+        X_obj = data_obj['X_obj']
+        obj_stimulus_ids = data_obj['stimulus_ids']
+        
+        # Align X_obj to predictions (X_llm)
+        # predictions has stimulus_id coordinate
+        pred_stimulus_ids = predictions['stimulus_id'].values
+        
+        # Create a mapping from stimulus_id to index in X_obj
+        obj_id_to_idx = {sid: i for i, sid in enumerate(obj_stimulus_ids)}
+        
+        # Reorder X_obj
+        indices = [obj_id_to_idx[sid] for sid in pred_stimulus_ids]
+        X_obj_aligned = X_obj[indices]
+        
+        # Prepare X_llm and y
+        X_llm = predictions.values
+        
+        # Align y (self.data) to predictions
+        # self.data also has stimulus_id
+        # But wait, self.data might not be sorted by passage?
+        # Let's align self.data to predictions as well using stimulus_id
+        # self.data is an xarray DataArray
+        y_aligned = self.data.sel(presentation=predictions['stimulus_id']).values
+        # Note: .sel(presentation=...) assumes 'presentation' is the dim name and it has stimulus_id as coord?
+        # In Pereira assembly, the dim is usually 'presentation' and it has 'stimulus_id' coord.
+        # But let's check how self.data is structured.
+        # In _load_data, it loads 'Pereira2018.language'.
+        # Usually it has 'presentation' dim.
+        # However, using .sel with coordinate values might be safer if we use the coordinate name.
+        # predictions['stimulus_id'] contains the IDs.
+        # We want to select from self.data where stimulus_id matches.
+        # self.data.sel(stimulus_id=predictions['stimulus_id']) should work if stimulus_id is a coordinate.
+        
+        # Actually, let's look at how linear_pearsonr does it.
+        # It calls self.metric(predictions, self.data).
+        # BrainScore metrics usually align internally.
+        # But here I am calling linear_partial_r2 manually.
+        
+        # Let's try to align y using xarray selection
+        # Ensure self.data has stimulus_id as a coordinate
+        # It should.
+        
+        # However, predictions and self.data might have different "presentation" indices.
+        # We want to match by stimulus_id.
+        # Let's assume stimulus_id is unique.
+        
+        # Re-indexing self.data to match predictions order
+        # We can use .set_index if needed, but usually .sel(stimulus_id=...) works if it's an index.
+        # If not, we can do it manually.
+        
+        data_stim_ids = self.data['stimulus_id'].values
+        data_id_to_idx = {sid: i for i, sid in enumerate(data_stim_ids)}
+        y_indices = [data_id_to_idx[sid] for sid in pred_stimulus_ids]
+        y_aligned = self.data.values[y_indices]
+        
+        # Define splits
+        # "10 splits over sentences"
+        # We can use KFold or ShuffleSplit.
+        # Let's use KFold(n_splits=10, shuffle=True, random_state=42)
+        from sklearn.model_selection import KFold
+        kf = KFold(n_splits=10, shuffle=True, random_state=42)
+        splits = list(kf.split(X_llm))
+        
+        # Compute score
+        score, diagnostics = self.metric(
+            X_obj=X_obj_aligned,
+            X_llm=X_llm,
+            y=y_aligned,
+            splits=splits
+        )
+        
+        # Wrap in Score object
+        # We need to return a Score object.
+        # BrainScore expects a Score object.
+        # We can attach diagnostics to attrs.
+        
+        final_score = Score(score)
+        final_score.attrs['diagnostics'] = diagnostics
+        final_score.attrs['model_identifier'] = candidate.identifier
+        final_score.attrs['benchmark_identifier'] = self.identifier
+        
+        return final_score
+

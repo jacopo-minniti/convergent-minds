@@ -23,7 +23,8 @@ dependencies = [
     "gensim",
     "joblib",
     # submission dependencies
-    "requests"
+    "requests",
+    "wordfreq>=3.0.0"
 ]
 
 [project.optional-dependencies]
