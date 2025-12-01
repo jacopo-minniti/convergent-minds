@@ -130,7 +130,7 @@ def main():
     # complex objects are stored in attrs. We convert them to string or remove them.
     print("Cleaning results attributes for serialization...")
     for key, value in list(results.attrs.items()):
-        if not isinstance(value, (str, int, float, list, tuple, type(None))):
+        if not isinstance(value, (str, int, float, list, tuple, dict, type(None))):
             # Try to convert numpy arrays to list if possible, otherwise stringify
             try:
                 import numpy as np
