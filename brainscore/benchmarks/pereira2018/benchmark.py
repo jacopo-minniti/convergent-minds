@@ -234,34 +234,8 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         # But wait, self.data might not be sorted by passage?
         # Let's align self.data to predictions as well using stimulus_id
         # self.data is an xarray DataArray
-        y_aligned = self.data.sel(presentation=predictions['stimulus_id']).values
-        # Note: .sel(presentation=...) assumes 'presentation' is the dim name and it has stimulus_id as coord?
-        # In Pereira assembly, the dim is usually 'presentation' and it has 'stimulus_id' coord.
-        # But let's check how self.data is structured.
-        # In _load_data, it loads 'Pereira2018.language'.
-        # Usually it has 'presentation' dim.
-        # However, using .sel with coordinate values might be safer if we use the coordinate name.
-        # predictions['stimulus_id'] contains the IDs.
-        # We want to select from self.data where stimulus_id matches.
-        # self.data.sel(stimulus_id=predictions['stimulus_id']) should work if stimulus_id is a coordinate.
-        
-        # Actually, let's look at how linear_pearsonr does it.
-        # It calls self.metric(predictions, self.data).
-        # BrainScore metrics usually align internally.
-        # But here I am calling linear_partial_r2 manually.
-        
-        # Let's try to align y using xarray selection
-        # Ensure self.data has stimulus_id as a coordinate
-        # It should.
-        
-        # However, predictions and self.data might have different "presentation" indices.
-        # We want to match by stimulus_id.
-        # Let's assume stimulus_id is unique.
-        
-        # Re-indexing self.data to match predictions order
-        # We can use .set_index if needed, but usually .sel(stimulus_id=...) works if it's an index.
-        # If not, we can do it manually.
-        
+        # Align y (self.data) to predictions
+        # Use manual alignment via stimulus_id to avoid xarray indexing issues
         data_stim_ids = self.data['stimulus_id'].values
         data_id_to_idx = {sid: i for i, sid in enumerate(data_stim_ids)}
         y_indices = [data_id_to_idx[sid] for sid in pred_stimulus_ids]
