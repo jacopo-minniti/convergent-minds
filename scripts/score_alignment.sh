@@ -29,7 +29,7 @@ source .venv/bin/activate
 
 python main.py \
     --model gpt2 \
-    --benchmark Pereira2018.243sentences-linear \
+    --benchmark Pereira2018.243sentences-partialr2 \
     --save_path data/scores/partialr2_localized_128/gpt2/untrained_pereira2018_linear \
     --num-units 128 \
     --localize \

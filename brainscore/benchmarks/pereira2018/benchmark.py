@@ -211,7 +211,7 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Objective features file not found at {filepath}. Please run precompute script.")
             
-        data_obj = np.load(filepath)
+        data_obj = np.load(filepath, allow_pickle=True)
         X_obj = data_obj['X_obj']
         obj_stimulus_ids = data_obj['stimulus_ids']
         
