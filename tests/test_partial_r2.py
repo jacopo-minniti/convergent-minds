@@ -4,7 +4,7 @@ from alignment.metrics.linear_partial_r2 import linear_partial_r2
 
 def test_linear_partial_r2_perfect_prediction():
     # Case where X_llm perfectly predicts y, and X_obj predicts nothing.
-    n_samples = 20
+    n_samples = 100
     n_features_obj = 5
     n_features_llm = 5
     n_neuroids = 2
@@ -19,8 +19,8 @@ def test_linear_partial_r2_perfect_prediction():
     # Splits: 2 splits
     indices = np.arange(n_samples)
     splits = [
-        (indices[:10], indices[10:]),
-        (indices[10:], indices[:10])
+        (indices[:50], indices[50:]),
+        (indices[50:], indices[:50])
     ]
     
     score, diagnostics = linear_partial_r2(X_obj, X_llm, y, splits)
@@ -33,7 +33,7 @@ def test_linear_partial_r2_perfect_prediction():
     
 def test_linear_partial_r2_redundant():
     # Case where X_obj perfectly predicts y, and X_llm adds nothing.
-    n_samples = 20
+    n_samples = 100
     n_features_obj = 5
     n_features_llm = 5
     n_neuroids = 2
