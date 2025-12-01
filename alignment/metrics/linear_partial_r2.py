@@ -2,13 +2,17 @@ import numpy as np
 from sklearn.linear_model import RidgeCV
 from sklearn.preprocessing import StandardScaler
 from typing import List, Tuple, Dict, Any
+from tqdm import tqdm
+import logging
+
+logger = logging.getLogger(__name__)
 
 def linear_partial_r2(
     X_obj: np.ndarray,
     X_llm: np.ndarray,
     y: np.ndarray,
     splits: List[Tuple[np.ndarray, np.ndarray]],
-    alpha_grid: np.ndarray = np.logspace(-3, 3, 7),
+    alpha_grid: np.ndarray = np.logspace(0, 5, 6),
 ) -> Tuple[float, Dict[str, Any]]:
     """
     Compute ΔR² brain alignment score using multi-output ridge and the given CV splits.
@@ -18,7 +22,7 @@ def linear_partial_r2(
         X_llm: LLM features (n_samples, n_features_llm)
         y: Neuroid responses (n_samples, n_neuroids)
         splits: List of (train_indices, test_indices)
-        alpha_grid: Alphas for RidgeCV
+        alpha_grid: Alphas for RidgeCV. Defaults to stronger regularization [1, 10, ..., 100000].
 
     Returns:
         alignment_score: scalar float (final ΔR²)
@@ -30,7 +34,11 @@ def linear_partial_r2(
     r2_combined_splits = []
     delta_r2_splits = []
     
-    for split_idx, (train_idx, test_idx) in enumerate(splits):
+    # Debugging: track alphas
+    alphas_baseline = []
+    alphas_llm = []
+    
+    for split_idx, (train_idx, test_idx) in enumerate(tqdm(splits, desc="Partial R2 CV")):
         # 4.1 Normalization of features
         # Standardize using the training partition only to avoid leakage.
         scaler_obj = StandardScaler()
@@ -54,11 +62,17 @@ def linear_partial_r2(
         y_pred_baseline_train = model_baseline.predict(Xb_train)
         y_pred_baseline_test = model_baseline.predict(Xb_test)
         
+        if hasattr(model_baseline, 'alpha_'):
+            alphas_baseline.append(model_baseline.alpha_)
+        
         # Fit LLM on residuals from baseline (i.e., partial out objective features)
         residual_train = y_train - y_pred_baseline_train
         model_llm = RidgeCV(alphas=alpha_grid)
         model_llm.fit(X_llm_train, residual_train)
         residual_pred_test = model_llm.predict(X_llm_test)
+        
+        if hasattr(model_llm, 'alpha_'):
+            alphas_llm.append(model_llm.alpha_)
         
         # Combined prediction = baseline + LLM residual prediction
         y_pred_combined = y_pred_baseline_test + residual_pred_test
@@ -105,13 +119,23 @@ def linear_partial_r2(
     r2_combined_per_split = [np.median(d) for d in r2_combined_splits]
     obj_llm_explained_variance = np.mean(r2_combined_per_split)
     
+    # Log alpha stats
+    if alphas_baseline:
+        avg_alpha_b = np.mean(alphas_baseline)
+        logger.info(f"Average Baseline Alpha: {avg_alpha_b}")
+    if alphas_llm:
+        avg_alpha_l = np.mean(alphas_llm)
+        logger.info(f"Average LLM Alpha: {avg_alpha_l}")
+
     diagnostics = {
         "r2_baseline_per_split_neuroid": r2_baseline_splits,
         "r2_combined_per_split_neuroid": r2_combined_splits,
         "delta_r2_per_split_neuroid": delta_r2_splits,
         "score_per_split": score_per_split,
         "objective_explained_variance": objective_explained_variance,
-        "obj_llm_explained_variance": obj_llm_explained_variance
+        "obj_llm_explained_variance": obj_llm_explained_variance,
+        "alphas_baseline": alphas_baseline,
+        "alphas_llm": alphas_llm
     }
     
     return float(alignment_score), diagnostics
