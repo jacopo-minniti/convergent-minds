@@ -1,7 +1,6 @@
 import numpy as np
 from sklearn.linear_model import RidgeCV
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
 from typing import List, Tuple, Dict, Any
 
 def linear_partial_r2(
@@ -26,29 +25,25 @@ def linear_partial_r2(
         diagnostics: dict with raw per-neuroid and per-split R²_baseline, R²_combined, ΔR².
     """
     
-    # 4.1 Normalization of features
-    # Standardize X_obj and X_llm once on the full dataset before splitting.
-    scaler_obj = StandardScaler()
-    X_obj_scaled = scaler_obj.fit_transform(X_obj)
-    
-    scaler_llm = StandardScaler()
-    X_llm_scaled = scaler_llm.fit_transform(X_llm)
-    
-    # Build baseline and combined design matrices
-    X_baseline = X_obj_scaled
-    X_combined = np.concatenate([X_obj_scaled, X_llm_scaled], axis=1)
-    
     # Storage for diagnostics
     r2_baseline_splits = []
     r2_combined_splits = []
     delta_r2_splits = []
     
     for split_idx, (train_idx, test_idx) in enumerate(splits):
-        # 4.2 Cross-validation and ridge fitting
-        Xb_train = X_baseline[train_idx]
-        Xb_test  = X_baseline[test_idx]
-        Xc_train = X_combined[train_idx]
-        Xc_test  = X_combined[test_idx]
+        # 4.1 Normalization of features
+        # Standardize using the training partition only to avoid leakage.
+        scaler_obj = StandardScaler()
+        X_obj_train = scaler_obj.fit_transform(X_obj[train_idx])
+        X_obj_test = scaler_obj.transform(X_obj[test_idx])
+
+        scaler_llm = StandardScaler()
+        X_llm_train = scaler_llm.fit_transform(X_llm[train_idx])
+        X_llm_test = scaler_llm.transform(X_llm[test_idx])
+
+        # Build baseline design matrix
+        Xb_train = X_obj_train
+        Xb_test  = X_obj_test
         
         y_train = y[train_idx]
         y_test  = y[test_idx]
@@ -56,12 +51,17 @@ def linear_partial_r2(
         # Fit baseline
         model_baseline = RidgeCV(alphas=alpha_grid)
         model_baseline.fit(Xb_train, y_train)
-        y_pred_baseline = model_baseline.predict(Xb_test)
+        y_pred_baseline_train = model_baseline.predict(Xb_train)
+        y_pred_baseline_test = model_baseline.predict(Xb_test)
         
-        # Fit combined
-        model_combined = RidgeCV(alphas=alpha_grid)
-        model_combined.fit(Xc_train, y_train)
-        y_pred_combined = model_combined.predict(Xc_test)
+        # Fit LLM on residuals from baseline (i.e., partial out objective features)
+        residual_train = y_train - y_pred_baseline_train
+        model_llm = RidgeCV(alphas=alpha_grid)
+        model_llm.fit(X_llm_train, residual_train)
+        residual_pred_test = model_llm.predict(X_llm_test)
+        
+        # Combined prediction = baseline + LLM residual prediction
+        y_pred_combined = y_pred_baseline_test + residual_pred_test
         
         # 4.3 R² computation per neuroid
         # Compute R² manually to match the spec:
@@ -71,7 +71,7 @@ def linear_partial_r2(
         y_train_mean = np.mean(y_train, axis=0)
         
         # Baseline R²
-        sse_baseline = np.sum((y_test - y_pred_baseline)**2, axis=0)
+        sse_baseline = np.sum((y_test - y_pred_baseline_test)**2, axis=0)
         sst_baseline = np.sum((y_test - y_train_mean)**2, axis=0)
         # Avoid division by zero
         sst_baseline[sst_baseline == 0] = 1e-10
