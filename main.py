@@ -17,7 +17,7 @@ def main():
     parser.add_argument("--device", default="cuda", help="Device to use (cpu, cuda)")
     parser.add_argument("--save_path", default=None, help="Directory to save results (overrides --output_dir)")
     parser.add_argument("--decay-rate", type=float, default=1.0, help="Decay rate for LocalityGPT2")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size for localization")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size for localization")
     args = parser.parse_args()
 
     # Handle save_path logic
