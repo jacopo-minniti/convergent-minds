@@ -125,12 +125,48 @@ def main():
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    # 1. Fix Serialization Error: Clean attributes
+    # 1. Extract info for JSON (before cleaning attributes)
+    import datetime
+    import sys
+    
+    # Extract diagnostics safely
+    diagnostics = results.attrs.get('diagnostics', {})
+    if isinstance(diagnostics, str):
+        # In case it's already a string (unlikely here but good practice)
+        try:
+            import ast
+            diagnostics = ast.literal_eval(diagnostics)
+        except:
+            diagnostics = {}
+            
+    info = {
+        "model": args.model,
+        "benchmark": args.benchmark,
+        "untrained": args.untrained,
+        "localize": args.localize,
+        "num_units": args.num_units,
+        "device": args.device,
+        "decay_rate": args.decay_rate if "locality_gpt" in args.model else None,
+        "score": float(results.values) if results.values.size == 1 else results.values.tolist(),
+        "alignment_score": float(results.values) if results.values.size == 1 else results.values.tolist(),
+        "objective_explained_variance": diagnostics.get('objective_explained_variance', None) if isinstance(diagnostics, dict) else None,
+        "obj_llm_explained_variance": diagnostics.get('obj_llm_explained_variance', None) if isinstance(diagnostics, dict) else None,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "args": vars(args),
+        "command": " ".join(sys.argv)
+    }
+
+    # 2. Fix Serialization Error: Clean attributes
     # The error "Invalid value for attr 'raw': <xarray.Score ...>" happens because 
     # complex objects are stored in attrs. We convert them to string or remove them.
     print("Cleaning results attributes for serialization...")
     for key, value in list(results.attrs.items()):
-        if not isinstance(value, (str, int, float, list, tuple, dict, type(None))):
+        # NetCDF only supports str, Number, ndarray, list, tuple. Dict is NOT supported.
+        # We also want to be careful with lists/tuples containing non-primitives.
+        if isinstance(value, dict):
+            print(f"Converting dictionary attribute '{key}' to string for NetCDF compatibility.")
+            results.attrs[key] = str(value)
+        elif not isinstance(value, (str, int, float, list, tuple, type(None))):
             # Try to convert numpy arrays to list if possible, otherwise stringify
             try:
                 import numpy as np
@@ -146,35 +182,29 @@ def main():
                 print(f"Failed to convert attribute '{key}': {e}. Removing it.")
                 del results.attrs[key]
 
-    # 2. Save results (NetCDF)
+    # 3. Save results (NetCDF)
     save_path_nc = os.path.join(args.output_dir, "score.nc")
     results.to_netcdf(save_path_nc)
     print(f"Results saved to: {save_path_nc}")
 
-    # 3. Save info.json
-    import datetime
-    import sys
-    
-    info = {
-        "model": args.model,
-        "benchmark": args.benchmark,
-        "untrained": args.untrained,
-        "localize": args.localize,
-        "num_units": args.num_units,
-        "device": args.device,
-        "decay_rate": args.decay_rate if "locality_gpt" in args.model else None,
-        "score": float(results.values) if results.values.size == 1 else results.values.tolist(),
-        "alignment_score": float(results.values) if results.values.size == 1 else results.values.tolist(),
-        "objective_explained_variance": results.attrs.get('diagnostics', {}).get('objective_explained_variance', None),
-        "obj_llm_explained_variance": results.attrs.get('diagnostics', {}).get('obj_llm_explained_variance', None),
-        "timestamp": datetime.datetime.now().isoformat(),
-        "args": vars(args),
-        "command": " ".join(sys.argv)
-    }
+    # 4. Save info.json
     save_path_json = os.path.join(args.output_dir, "info.json")
     import json
     with open(save_path_json, 'w') as f:
-        json.dump(info, f, indent=4)
+        # Handle potential non-serializable types in info (like numpy types)
+        def default(o):
+            import numpy as np
+            if isinstance(o, (np.int_, np.intc, np.intp, np.int8,
+                              np.int16, np.int32, np.int64, np.uint8,
+                              np.uint16, np.uint32, np.uint64)):
+                return int(o)
+            elif isinstance(o, (np.float_, np.float16, np.float32, np.float64)):
+                return float(o)
+            elif isinstance(o, (np.ndarray,)):
+                return o.tolist()
+            return str(o)
+            
+        json.dump(info, f, indent=4, default=default)
     print(f"Run info saved to: {save_path_json}")
 
     # 4. Save Benchmark Examples (Stimuli)
