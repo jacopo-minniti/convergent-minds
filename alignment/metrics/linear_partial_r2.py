@@ -97,11 +97,21 @@ def linear_partial_r2(
     # Mean across splits
     alignment_score = np.mean(score_per_split)
     
+    # Calculate aggregated variances
+    # Median across neuroids per split, then mean across splits
+    r2_baseline_per_split = [np.median(d) for d in r2_baseline_splits]
+    objective_explained_variance = np.mean(r2_baseline_per_split)
+    
+    r2_combined_per_split = [np.median(d) for d in r2_combined_splits]
+    obj_llm_explained_variance = np.mean(r2_combined_per_split)
+    
     diagnostics = {
         "r2_baseline_per_split_neuroid": r2_baseline_splits,
         "r2_combined_per_split_neuroid": r2_combined_splits,
         "delta_r2_per_split_neuroid": delta_r2_splits,
-        "score_per_split": score_per_split
+        "score_per_split": score_per_split,
+        "objective_explained_variance": objective_explained_variance,
+        "obj_llm_explained_variance": obj_llm_explained_variance
     }
     
     return float(alignment_score), diagnostics
