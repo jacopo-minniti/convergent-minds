@@ -297,24 +297,20 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             # pearson_r_splits is list of (n_neuroids,)
             pearson_r_neuroid = np.mean(diagnostics['pearson_r_splits'], axis=0)
             
-            # We need to align this with self.ceiling
-            # self.ceiling is an xarray Score with 'neuroid' dim
-            # y_aligned was aligned to predictions.
-            # predictions were aligned to passages.
-            # y_aligned is (n_samples, n_neuroids).
-            # The neuroid dimension order in y_aligned comes from self.data (via y_indices selection on samples, but all neuroids are present).
-            # self.data.values[y_indices] selects rows (samples). Columns (neuroids) are untouched.
-            # So the neuroid order in y_aligned matches self.data.
-            # self.ceiling should match self.data.
-            
-            # Create xarray for correlation
-            corr_xr = xr.DataArray(pearson_r_neuroid, coords={'neuroid': self.data['neuroid']}, dims='neuroid')
+            # Aggregate across neuroids (median) to get a scalar raw score
+            # This matches how linear_pearsonr typically works (aggregates before returning)
+            # and ensures compatibility with ceiling_normalize which expects scalars.
+            raw_pearson = float(np.median(pearson_r_neuroid))
+            raw_score = Score(raw_pearson)
             
             # Normalize
-            normalized_xr = ceiling_normalize(corr_xr, self.ceiling)
-            
-            # Aggregate (median)
-            original_normalized_alignment_score = float(normalized_xr.median())
+            # self.ceiling is expected to be an aggregated scalar Score
+            try:
+                normalized_score = ceiling_normalize(raw_score, self.ceiling)
+                original_normalized_alignment_score = float(normalized_score.values)
+            except Exception as e:
+                print(f"Warning: Failed to normalize correlation: {e}")
+                original_normalized_alignment_score = None
         
         # Wrap in Score object
         final_score = Score(score)
