@@ -15,6 +15,7 @@ __pycache__/
 xarray_test/*
 data/
 data/fedorenko10_stimuli
+prev-brain-alignment
 
 # C extensions
 *.so

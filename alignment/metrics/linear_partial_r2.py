@@ -99,8 +99,8 @@ def linear_partial_r2(
         
         # --- New: LLM Only Correlation ---
         model_llm_only = RidgeCV(alphas=alpha_grid)
-        model_llm_only.fit(X_llm_train, y_train)
-        y_pred_llm_only = model_llm_only.predict(X_llm_test)
+        model_llm_only.fit(X_llm_train_scaled, y_train)
+        y_pred_llm_only = model_llm_only.predict(X_llm_test_scaled)
         
         # Pearson r per neuroid
         # Centering

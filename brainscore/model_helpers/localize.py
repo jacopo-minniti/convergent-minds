@@ -142,7 +142,7 @@ def localize_fed10(model_id: str,
     Localize the model by selecting the top `top_k` units.
     """
 
-    save_path = f"{BRAINIO_CACHE}/{model_id}_language_mask.npy"
+    save_path = f"{BRAINIO_CACHE}/{model_id}_topk={top_k}_language_mask.npy"
 
     if os.path.exists(save_path):
         logger.debug(f"Loading language mask from {save_path}")
@@ -164,7 +164,11 @@ def localize_fed10(model_id: str,
         _, rix = np.unique(-a, return_inverse=True)
         return np.where(rix < k, 1, 0).reshape(a.shape)
 
-    language_mask = is_topk(t_values_matrix, k=top_k)
+    t_values_matrix = np.nan_to_num(t_values_matrix, nan=-np.inf)
+    
+    language_mask = np.zeros(t_values_matrix.shape, dtype=int)
+    for i in range(t_values_matrix.shape[0]):
+        language_mask[i] = is_topk(t_values_matrix[i], k=top_k)
 
     np.save(save_path, language_mask)
     logger.debug(f"{model_id} language mask cached to {save_path}")
