@@ -149,6 +149,8 @@ def main():
         "decay_rate": args.decay_rate if "locality_gpt" in args.model else None,
         "score": float(results.values) if results.values.size == 1 else results.values.tolist(),
         "alignment_score": float(results.values) if results.values.size == 1 else results.values.tolist(),
+        "original_alignment_score": results.attrs.get('original_alignment_score', None),
+        "original_normalized_alignment_score": results.attrs.get('original_normalized_alignment_score', None),
         "objective_explained_variance": diagnostics.get('objective_explained_variance', None) if isinstance(diagnostics, dict) else None,
         "obj_llm_explained_variance": diagnostics.get('obj_llm_explained_variance', None) if isinstance(diagnostics, dict) else None,
         "timestamp": datetime.datetime.now().isoformat(),

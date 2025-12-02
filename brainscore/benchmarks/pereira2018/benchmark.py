@@ -151,11 +151,33 @@ class _Pereira2018Experiment(BenchmarkBase):
 
 
 def Pereira2018_243sentences_partialr2():
-    return _Pereira2018ExperimentPartialR2(experiment='243sentences')
+    return _Pereira2018ExperimentPartialR2(experiment='243sentences', ceiling_s3_kwargs=dict(
+        version_id='CHl_9aFHIWVnPW_njePfy28yzggKuUPw',
+        sha1='5e23de899883828f9c886aec304bc5aa0f58f66c',
+        raw_kwargs=dict(
+            version_id='uZye03ENmn.vKB5mARUGhcIY_DjShtPD',
+            sha1='525a6ac8c14ad826c63fdd71faeefb8ba542d5ac',
+            raw_kwargs=dict(
+                version_id='XVTo58Po5YrNjTuDIWrmfHI0nbN2MVZa',
+                sha1='34ba453dc7e8a19aed18cc9bca160e97b4a80be5'
+            )
+        )
+    ))
 
 
 def Pereira2018_384sentences_partialr2():
-    return _Pereira2018ExperimentPartialR2(experiment='384sentences')
+    return _Pereira2018ExperimentPartialR2(experiment='384sentences', ceiling_s3_kwargs=dict(
+        version_id='sjlnXr5wXUoGv6exoWu06C4kYI0KpZLk',
+        sha1='fc895adc52fd79cea3040961d65d8f736a9d3e29',
+        raw_kwargs=dict(
+            version_id='Hi74r9UKfpK0h0Bjf5DL.JgflGoaknrA',
+            sha1='ce2044a7713426870a44131a99bfc63d8843dae0',
+            raw_kwargs=dict(
+                version_id='m4dq_ouKWZkYtdyNPMSP0p6rqb7wcYpi',
+                sha1='fe9fb24b34fd5602e18e34006ac5ccc7d4c825b8'
+            )
+        )
+    ))
 
 
 class _Pereira2018ExperimentPartialR2(BenchmarkBase):
@@ -165,17 +187,24 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
     Alignment is evaluated via Partial R2 with objective features.
     """
 
-    def __init__(self, experiment: str):
+    def __init__(self, experiment: str, ceiling_s3_kwargs: dict = None):
         self.data = self._load_data(experiment)
         from alignment.metrics.linear_partial_r2 import linear_partial_r2
         self.metric = linear_partial_r2
         identifier = f'Pereira2018.{experiment}-partialr2'
         self.experiment = experiment
+        
+        ceiling = None
+        if ceiling_s3_kwargs:
+            # Load ceiling using the linear benchmark identifier
+            ceiling_identifier = f'Pereira2018.{experiment}-linear'
+            ceiling = self._load_ceiling(identifier=ceiling_identifier, **ceiling_s3_kwargs)
+            
         super(_Pereira2018ExperimentPartialR2, self).__init__(
             identifier=identifier,
             version=1,
             parent=f'Pereira2018-partialr2',
-            ceiling=None,
+            ceiling=ceiling,
             bibtex=BIBTEX)
 
     def _load_data(self, experiment: str) -> NeuroidAssembly:
@@ -184,6 +213,13 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         data = data.dropna('neuroid')  # not all subjects have done both experiments, drop those that haven't
         data.attrs['identifier'] = f"{data.identifier}.{experiment}"
         return data
+
+    def _load_ceiling(self, identifier: str, version_id: str, sha1: str, assembly_prefix="ceiling_", raw_kwargs=None):
+        ceiling = load_from_s3(identifier, cls=Score, assembly_prefix=assembly_prefix, version_id=version_id, sha1=sha1)
+        if raw_kwargs:  # recursively load raw attributes
+            raw = self._load_ceiling(identifier=identifier, assembly_prefix=assembly_prefix + "raw_", **raw_kwargs)
+            ceiling.attrs['raw'] = raw
+        return ceiling
 
     def __call__(self, candidate: ArtificialSubject) -> Score:
         candidate.start_neural_recording(recording_target=ArtificialSubject.RecordingTarget.language_system,
@@ -230,22 +266,11 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         X_llm = predictions.values
         
         # Align y (self.data) to predictions
-        # self.data also has stimulus_id
-        # But wait, self.data might not be sorted by passage?
-        # Let's align self.data to predictions as well using stimulus_id
-        # self.data is an xarray DataArray
-        # Align y (self.data) to predictions
         # Use manual alignment via stimulus_id to avoid xarray indexing issues
         data_stim_ids = self.data['stimulus_id'].values
         data_id_to_idx = {sid: i for i, sid in enumerate(data_stim_ids)}
         y_indices = [data_id_to_idx[sid] for sid in pred_stimulus_ids]
         y_aligned = self.data.values[y_indices]
-        
-        print(f"DEBUG: Alignment Check")
-        print(f"Pred Stim IDs (first 5): {pred_stimulus_ids[:5]}")
-        print(f"Data Stim IDs (first 5): {data_stim_ids[:5]}")
-        print(f"Aligned Indices (first 5): {y_indices[:5]}")
-        print(f"Aligned Data Shape: {y_aligned.shape}")
         
         # Define splits
         # "10 splits over sentences"
@@ -263,15 +288,43 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             splits=splits
         )
         
-        # Wrap in Score object
-        # We need to return a Score object.
-        # BrainScore expects a Score object.
-        # We can attach diagnostics to attrs.
+        # Calculate Normalized Correlation
+        original_alignment_score = diagnostics.get('original_alignment_score', None)
+        original_normalized_alignment_score = None
         
+        if self.ceiling is not None and 'pearson_r_splits' in diagnostics:
+            # Average Pearson R across splits to get per-neuroid correlation
+            # pearson_r_splits is list of (n_neuroids,)
+            pearson_r_neuroid = np.mean(diagnostics['pearson_r_splits'], axis=0)
+            
+            # We need to align this with self.ceiling
+            # self.ceiling is an xarray Score with 'neuroid' dim
+            # y_aligned was aligned to predictions.
+            # predictions were aligned to passages.
+            # y_aligned is (n_samples, n_neuroids).
+            # The neuroid dimension order in y_aligned comes from self.data (via y_indices selection on samples, but all neuroids are present).
+            # self.data.values[y_indices] selects rows (samples). Columns (neuroids) are untouched.
+            # So the neuroid order in y_aligned matches self.data.
+            # self.ceiling should match self.data.
+            
+            # Create xarray for correlation
+            corr_xr = xr.DataArray(pearson_r_neuroid, coords={'neuroid': self.data['neuroid']}, dims='neuroid')
+            
+            # Normalize
+            normalized_xr = ceiling_normalize(corr_xr, self.ceiling)
+            
+            # Aggregate (median)
+            original_normalized_alignment_score = float(normalized_xr.median())
+        
+        # Wrap in Score object
         final_score = Score(score)
         final_score.attrs['diagnostics'] = diagnostics
         final_score.attrs['model_identifier'] = candidate.identifier
         final_score.attrs['benchmark_identifier'] = self.identifier
         
+        if original_alignment_score is not None:
+            final_score.attrs['original_alignment_score'] = original_alignment_score
+        if original_normalized_alignment_score is not None:
+            final_score.attrs['original_normalized_alignment_score'] = original_normalized_alignment_score
+        
         return final_score
-
