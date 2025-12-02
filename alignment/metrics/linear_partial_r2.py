@@ -38,6 +38,18 @@ def linear_partial_r2(
     alphas_baseline = []
     alphas_llm = []
     
+    logger.info(f"linear_partial_r2 input shapes: X_obj={X_obj.shape}, X_llm={X_llm.shape}, y={y.shape}")
+    logger.info(f"X_obj stats: mean={np.mean(X_obj):.4f}, std={np.std(X_obj):.4f}, min={np.min(X_obj):.4f}, max={np.max(X_obj):.4f}")
+    logger.info(f"X_llm stats: mean={np.mean(X_llm):.4f}, std={np.std(X_llm):.4f}, min={np.min(X_llm):.4f}, max={np.max(X_llm):.4f}")
+    logger.info(f"y stats: mean={np.mean(y):.4f}, std={np.std(y):.4f}, min={np.min(y):.4f}, max={np.max(y):.4f}")
+    
+    if np.isnan(X_obj).any():
+        logger.error("X_obj contains NaNs!")
+    if np.isnan(X_llm).any():
+        logger.error("X_llm contains NaNs!")
+    if np.isnan(y).any():
+        logger.error("y contains NaNs!")
+    
     for split_idx, (train_idx, test_idx) in enumerate(tqdm(splits, desc="Partial R2 CV")):
         # 4.1 Normalization of features
         # Standardize using the training partition only to avoid leakage.
@@ -103,6 +115,12 @@ def linear_partial_r2(
         r2_baseline_splits.append(r2_baseline)
         r2_combined_splits.append(r2_combined)
         delta_r2_splits.append(delta_r2)
+        
+        if split_idx == 0:
+            logger.info(f"Split 0: Median R2 Baseline = {np.median(r2_baseline):.4f}")
+            logger.info(f"Split 0: Median R2 Combined = {np.median(r2_combined):.4f}")
+            logger.info(f"Split 0: Median Delta R2 = {np.median(delta_r2):.4f}")
+            logger.info(f"Split 0: Max R2 Combined = {np.max(r2_combined):.4f}")
         
     # 4.4 Aggregation
     # Median across neuroids per split
