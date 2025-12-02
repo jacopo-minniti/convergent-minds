@@ -241,6 +241,12 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         y_indices = [data_id_to_idx[sid] for sid in pred_stimulus_ids]
         y_aligned = self.data.values[y_indices]
         
+        print(f"DEBUG: Alignment Check")
+        print(f"Pred Stim IDs (first 5): {pred_stimulus_ids[:5]}")
+        print(f"Data Stim IDs (first 5): {data_stim_ids[:5]}")
+        print(f"Aligned Indices (first 5): {y_indices[:5]}")
+        print(f"Aligned Data Shape: {y_aligned.shape}")
+        
         # Define splits
         # "10 splits over sentences"
         # We can use KFold or ShuffleSplit.
