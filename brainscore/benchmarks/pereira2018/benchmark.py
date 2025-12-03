@@ -284,6 +284,16 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             n_splits = 10
             gkf = GroupKFold(n_splits=n_splits)
             splits = list(gkf.split(X_llm, y_aligned, groups=passage_labels_aligned))
+            
+            # DEBUG: Verify splits
+            print(f"DEBUG: Topic-Wise CV Enabled. Unique groups: {len(set(passage_labels_aligned))}")
+            print(f"DEBUG: Number of splits: {len(splits)}")
+            train_idx, test_idx = splits[0]
+            train_groups = set(passage_labels_aligned[train_idx])
+            test_groups = set(passage_labels_aligned[test_idx])
+            print(f"DEBUG: Split 0 - Train size: {len(train_idx)}, Test size: {len(test_idx)}")
+            print(f"DEBUG: Split 0 - Overlap between Train/Test groups: {train_groups.intersection(test_groups)}")
+            assert len(train_groups.intersection(test_groups)) == 0, "CRITICAL: Group leakage detected!"
         else:
             # Random CV: Use KFold with shuffling
             from sklearn.model_selection import KFold
