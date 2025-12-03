@@ -86,7 +86,7 @@ def main():
             
             subject = HierarchicalGPT2(
                 model_id=args.model,
-                region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_name},
+                region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: [layer_name]},
                 depth=depth,
                 untrained=args.untrained,
                 use_localizer=args.localize,
