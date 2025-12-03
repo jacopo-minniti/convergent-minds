@@ -272,13 +272,17 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         y_indices = [data_id_to_idx[sid] for sid in pred_stimulus_ids]
         y_aligned = self.data.values[y_indices]
         
+        # Get passage labels for the aligned data for GroupKFold
+        # self.data has passage_label, so we can use y_indices to get them
+        passage_labels_aligned = self.data['passage_label'].values[y_indices]
+        
         # Define splits
-        # "10 splits over sentences"
-        # We can use KFold or ShuffleSplit.
-        # Let's use KFold(n_splits=10, shuffle=True, random_state=42)
-        from sklearn.model_selection import KFold
-        kf = KFold(n_splits=10, shuffle=True, random_state=42)
-        splits = list(kf.split(X_llm))
+        # Topic-Held-Out: Use GroupKFold with passage labels
+        from sklearn.model_selection import GroupKFold
+        # 10 splits seems reasonable given ~60-80 passages
+        n_splits = 10
+        gkf = GroupKFold(n_splits=n_splits)
+        splits = list(gkf.split(X_llm, y_aligned, groups=passage_labels_aligned))
         
         # Compute score
         score, diagnostics = self.metric(
@@ -294,6 +298,7 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         
         original_normalized_alignment_score = None
         objective_normalized_alignment_score = None
+        normalized_partial_r2 = None
         
         if self.ceiling is not None:
             # Normalize LLM Correlation
@@ -316,6 +321,33 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
                 except Exception as e:
                     print(f"Warning: Failed to normalize Objective correlation: {e}")
                     objective_normalized_alignment_score = None
+            
+            # Normalize Partial R2
+            # Assuming ceiling is Pearson r, ceiling explained variance is r^2
+            # We aggregate ceiling across neuroids (median/mean) to get a scalar ceiling R2?
+            # Or we normalize per neuroid and then aggregate?
+            # The metric returns aggregated score.
+            # Let's try to normalize the aggregated score by the aggregated ceiling R2.
+            try:
+                # Ceiling is per neuroid.
+                # We need to align ceiling to the neuroids we have (y_aligned is (n_samples, n_neuroids))
+                # y_aligned comes from self.data.
+                # self.ceiling should match self.data neuroids.
+                # Let's check if we can get a scalar ceiling R2.
+                ceiling_values = self.ceiling.values # (n_neuroids,)
+                # If ceiling is r, r^2 is explained variance ceiling.
+                ceiling_r2 = ceiling_values ** 2
+                # Take median ceiling R2 (consistent with median aggregation in metric)
+                median_ceiling_r2 = np.median(ceiling_r2)
+                
+                if median_ceiling_r2 > 0:
+                    normalized_partial_r2 = score / median_ceiling_r2
+                else:
+                    normalized_partial_r2 = 0.0
+            except Exception as e:
+                print(f"Warning: Failed to normalize Partial R2: {e}")
+                normalized_partial_r2 = None
+
         
         # Wrap in Score object
         final_score = Score(score)
@@ -332,5 +364,8 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             final_score.attrs['objective_alignment_score'] = objective_alignment_score
         if objective_normalized_alignment_score is not None:
             final_score.attrs['objective_normalized_alignment_score'] = objective_normalized_alignment_score
+            
+        if normalized_partial_r2 is not None:
+            final_score.attrs['normalized_partial_r2'] = normalized_partial_r2
         
         return final_score
