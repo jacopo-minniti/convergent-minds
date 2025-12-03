@@ -123,10 +123,15 @@ class LocalityGPT2Attention(GPT2Attention):
             distance_matrix = torch.abs(i_indices - j_indices)
             
             # Apply exponential decay: exp(-decay_rate * distance)
-            decay_matrix = torch.exp(-self.decay_rate * distance_matrix.to(attn_weights.dtype))
+            # We want to penalize distant tokens.
+            # Standard attention: softmax(Q K^T / sqrt(d))
+            # Local attention: softmax(Q K^T / sqrt(d) - decay * distance)
+            # This is equivalent to multiplying probabilities by exp(-decay * distance)
             
-            # Broadcast decay_matrix to match attn_weights dimensions
-            attn_weights = attn_weights * decay_matrix.unsqueeze(0).unsqueeze(0)
+            decay_penalty = self.decay_rate * distance_matrix.to(attn_weights.dtype)
+            
+            # Broadcast penalty to match attn_weights dimensions
+            attn_weights = attn_weights - decay_penalty.unsqueeze(0).unsqueeze(0)
         
         # --- END: Configurable Exponential Decay ---
 

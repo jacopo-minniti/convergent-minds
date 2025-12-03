@@ -55,8 +55,9 @@ def test_attention_with_default_decay(gpt2_config):
     i = torch.arange(seq_len).unsqueeze(1)
     j = torch.arange(seq_len).unsqueeze(0)
     distance = torch.abs(i - j).float()
-    expected_decay = torch.exp(-1.0 * distance)
-    decayed_weights = raw_weights * expected_decay.unsqueeze(0).unsqueeze(0)
+    distance = torch.abs(i - j).float()
+    decay_penalty = 1.0 * distance
+    decayed_weights = raw_weights - decay_penalty.unsqueeze(0).unsqueeze(0)
     
     causal_mask = attn_layer.bias[:, :, :seq_len, :seq_len].bool()
     masked_bias = attn_layer.masked_bias
