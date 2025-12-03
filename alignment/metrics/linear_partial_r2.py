@@ -34,6 +34,7 @@ def linear_partial_r2(
     r2_combined_splits = []
     delta_r2_splits = []
     pearson_r_splits = [] # New: for LLM-only Pearson r
+    pearson_r_objective_splits = [] # New: for Objective-only Pearson r
     
     # Debugging: track alphas
     alphas_baseline = []
@@ -119,6 +120,16 @@ def linear_partial_r2(
         pearson_r_splits.append(pearson_r)
         # ---------------------------------
         
+        # --- New: Objective Only Correlation ---
+        # Centering
+        y_pred_baseline_c = y_pred_baseline_test - np.mean(y_pred_baseline_test, axis=0)
+        y_pred_baseline_norm = np.sqrt(np.sum(y_pred_baseline_c**2, axis=0))
+        y_pred_baseline_norm[y_pred_baseline_norm == 0] = 1e-10
+        
+        pearson_r_obj = np.sum(y_test_c * y_pred_baseline_c, axis=0) / (y_test_norm * y_pred_baseline_norm)
+        pearson_r_objective_splits.append(pearson_r_obj)
+        # ---------------------------------------
+
         # 4.3 R² computation per neuroid
         # Compute R² manually to match the spec:
         # SST_j = sum_i (y_test_j[i] - mean(y_train_j))²
@@ -152,6 +163,7 @@ def linear_partial_r2(
             logger.info(f"Split 0: Median Delta R2 = {np.median(delta_r2):.4f}")
             logger.info(f"Split 0: Max R2 Combined = {np.max(r2_combined):.4f}")
             logger.info(f"Split 0: Median LLM-Only Pearson r = {np.median(pearson_r):.4f}")
+            logger.info(f"Split 0: Median Objective Pearson r = {np.median(pearson_r_obj):.4f}")
 
     # 4.4 Aggregation
     # Median across neuroids per split
@@ -163,6 +175,10 @@ def linear_partial_r2(
     # LLM Only Correlation Aggregation
     pearson_r_per_split = [np.median(d) for d in pearson_r_splits]
     original_alignment_score = np.mean(pearson_r_per_split)
+    
+    # Objective Only Correlation Aggregation
+    pearson_r_obj_per_split = [np.median(d) for d in pearson_r_objective_splits]
+    objective_alignment_score = np.mean(pearson_r_obj_per_split)
     
     # Calculate aggregated variances
     # Median across neuroids per split, then mean across splits
@@ -185,10 +201,12 @@ def linear_partial_r2(
         "r2_combined_per_split_neuroid": r2_combined_splits,
         "delta_r2_per_split_neuroid": delta_r2_splits,
         "pearson_r_splits": pearson_r_splits, # List of arrays
+        "pearson_r_objective_splits": pearson_r_objective_splits,
         "score_per_split": score_per_split,
         "objective_explained_variance": objective_explained_variance,
         "obj_llm_explained_variance": obj_llm_explained_variance,
         "original_alignment_score": original_alignment_score,
+        "objective_alignment_score": objective_alignment_score,
         "alphas_baseline": alphas_baseline,
         "alphas_llm": alphas_llm
     }

@@ -290,27 +290,32 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         
         # Calculate Normalized Correlation
         original_alignment_score = diagnostics.get('original_alignment_score', None)
-        original_normalized_alignment_score = None
+        objective_alignment_score = diagnostics.get('objective_alignment_score', None)
         
-        if self.ceiling is not None and 'pearson_r_splits' in diagnostics:
-            # Average Pearson R across splits to get per-neuroid correlation
-            # pearson_r_splits is list of (n_neuroids,)
-            pearson_r_neuroid = np.mean(diagnostics['pearson_r_splits'], axis=0)
-            
-            # Aggregate across neuroids (median) to get a scalar raw score
-            # This matches how linear_pearsonr typically works (aggregates before returning)
-            # and ensures compatibility with ceiling_normalize which expects scalars.
-            raw_pearson = float(np.median(pearson_r_neuroid))
-            raw_score = Score(raw_pearson)
-            
-            # Normalize
-            # self.ceiling is expected to be an aggregated scalar Score
-            try:
-                normalized_score = ceiling_normalize(raw_score, self.ceiling)
-                original_normalized_alignment_score = float(normalized_score.values)
-            except Exception as e:
-                print(f"Warning: Failed to normalize correlation: {e}")
-                original_normalized_alignment_score = None
+        original_normalized_alignment_score = None
+        objective_normalized_alignment_score = None
+        
+        if self.ceiling is not None:
+            # Normalize LLM Correlation
+            if original_alignment_score is not None:
+                try:
+                    # Create a scalar Score object for normalization
+                    raw_score = Score(original_alignment_score)
+                    normalized_score = ceiling_normalize(raw_score, self.ceiling)
+                    original_normalized_alignment_score = float(normalized_score.values)
+                except Exception as e:
+                    print(f"Warning: Failed to normalize LLM correlation: {e}")
+                    original_normalized_alignment_score = None
+
+            # Normalize Objective Correlation
+            if objective_alignment_score is not None:
+                try:
+                    raw_score = Score(objective_alignment_score)
+                    normalized_score = ceiling_normalize(raw_score, self.ceiling)
+                    objective_normalized_alignment_score = float(normalized_score.values)
+                except Exception as e:
+                    print(f"Warning: Failed to normalize Objective correlation: {e}")
+                    objective_normalized_alignment_score = None
         
         # Wrap in Score object
         final_score = Score(score)
@@ -322,5 +327,10 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             final_score.attrs['original_alignment_score'] = original_alignment_score
         if original_normalized_alignment_score is not None:
             final_score.attrs['original_normalized_alignment_score'] = original_normalized_alignment_score
+            
+        if objective_alignment_score is not None:
+            final_score.attrs['objective_alignment_score'] = objective_alignment_score
+        if objective_normalized_alignment_score is not None:
+            final_score.attrs['objective_normalized_alignment_score'] = objective_normalized_alignment_score
         
         return final_score

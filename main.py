@@ -36,108 +36,155 @@ def main():
         print("CUDA not available, falling back to CPU")
         device = 'cpu'
 
-    print(f"Loading model: {args.model} (Untrained: {args.untrained})")
+    seeds = [0, 1, 2, 3, 4]
+    all_results = []
     
-    if "locality_gpt" in args.model:
-        # For LocalityGPT, we need to handle config manually if needed, but it seems it handles itself.
-        # However, we need hidden_dim for localizer_kwargs if we want to be consistent, 
-        # but LocalityGPT might not use the same localizer logic or might handle it internally.
-        # Let's check LocalityGPT init. It takes localizer_kwargs.
+    for seed in seeds:
+        print(f"\n=== Running Seed {seed} ===")
+        # Set seed
+        import random
+        import numpy as np
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            
+        print(f"Loading model: {args.model} (Untrained: {args.untrained})")
         
-        base_model_id = "gpt2"
-        config = AutoConfig.from_pretrained(base_model_id)
-        hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
-        
-        localizer_kwargs = {
-            'top_k': args.num_units,
-            'batch_size': args.batch_size,
-            'hidden_dim': hidden_dim
-        }
-        
-        layer_names = get_layer_names(base_model_id)
-        subject = LocalityGPT2(
-            model_id=base_model_id,
-            region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
-            untrained=args.untrained,
-            use_localizer=args.localize,
-            localizer_kwargs=localizer_kwargs, 
-            decay_rate=args.decay_rate
-        )
-        subject.model.to(device)
-        subject.model.eval()
-    else:
-        # Load Model and Tokenizer
-        model_path = args.model
-        # Resolve possible paths: absolute, relative, or under 'models/' directory
-        if os.path.isabs(args.model) and os.path.isdir(args.model):
-            model_path = args.model
-        elif os.path.isdir(args.model):
-            model_path = args.model
+        if "locality_gpt" in args.model:
+            # For LocalityGPT, we need to handle config manually if needed, but it seems it handles itself.
+            # However, we need hidden_dim for localizer_kwargs if we want to be consistent, 
+            # but LocalityGPT might not use the same localizer logic or might handle it internally.
+            # Let's check LocalityGPT init. It takes localizer_kwargs.
+            
+            base_model_id = "gpt2"
+            config = AutoConfig.from_pretrained(base_model_id)
+            hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
+            
+            localizer_kwargs = {
+                'top_k': args.num_units,
+                'batch_size': args.batch_size,
+                'hidden_dim': hidden_dim
+            }
+            
+            layer_names = get_layer_names(base_model_id)
+            subject = LocalityGPT2(
+                model_id=base_model_id,
+                region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
+                untrained=args.untrained,
+                use_localizer=args.localize,
+                localizer_kwargs=localizer_kwargs, 
+                decay_rate=args.decay_rate
+            )
+            subject.model.to(device)
+            subject.model.eval()
         else:
-            # Check if the model exists under the 'models' subdirectory
-            possible_path = os.path.join(os.getcwd(), "models", args.model)
-            if os.path.isdir(possible_path):
-                model_path = possible_path
-            else:
-                # Assume it's a HuggingFace model identifier
+            # Load Model and Tokenizer
+            model_path = args.model
+            # Resolve possible paths: absolute, relative, or under 'models/' directory
+            if os.path.isabs(args.model) and os.path.isdir(args.model):
                 model_path = args.model
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+            elif os.path.isdir(args.model):
+                model_path = args.model
+            else:
+                # Check if the model exists under the 'models' subdirectory
+                possible_path = os.path.join(os.getcwd(), "models", args.model)
+                if os.path.isdir(possible_path):
+                    model_path = possible_path
+                else:
+                    # Assume it's a HuggingFace model identifier
+                    model_path = args.model
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+    
+            if args.untrained:
+                config = AutoConfig.from_pretrained(model_path)
+                model = AutoModelForCausalLM.from_config(config)
+            else:
+                model = AutoModelForCausalLM.from_pretrained(model_path)
+                config = model.config
+            
+            model.to(device)
+            model.eval()
+    
+            layer_names = get_layer_names(args.model)
+            
+            hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
+            localizer_kwargs = {
+                'top_k': args.num_units,
+                'batch_size': args.batch_size,
+                'hidden_dim': hidden_dim
+            }
+            
+            subject = HuggingfaceSubject(
+                model_id=args.model + ("-untrained" if args.untrained else ""),
+                model=model,
+                tokenizer=tokenizer,
+                region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
+                use_localizer=args.localize,
+                localizer_kwargs=localizer_kwargs
+            )
+    
+        # Score
+        print(f"Loading benchmark: {args.benchmark}")
+        benchmark = load_benchmark(args.benchmark)
+    
+        print("Scoring model...")
+        results = score(subject, benchmark)
+        print(f"Score (Seed {seed}): {results}")
+        all_results.append(results)
 
-        if args.untrained:
-            config = AutoConfig.from_pretrained(model_path)
-            model = AutoModelForCausalLM.from_config(config)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path)
-            config = model.config
+    # Average results
+    print("\n=== Averaging Results ===")
+    avg_score = np.mean([float(r.values) if r.values.size == 1 else np.mean(r.values) for r in all_results])
+    
+    # Extract diagnostics from the first result (assuming structure is consistent)
+    # But we need to average the scalar metrics inside diagnostics too
+    
+    def get_attr(res, key, default=None):
+        return res.attrs.get(key, default)
         
-        model.to(device)
-        model.eval()
+    def get_diag(res, key, default=None):
+        diag = res.attrs.get('diagnostics', {})
+        if isinstance(diag, str):
+            try:
+                import ast
+                diag = ast.literal_eval(diag)
+            except:
+                diag = {}
+        return diag.get(key, default)
 
-        layer_names = get_layer_names(args.model)
-        
-        hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
-        localizer_kwargs = {
-            'top_k': args.num_units,
-            'batch_size': args.batch_size,
-            'hidden_dim': hidden_dim
-        }
-        
-        subject = HuggingfaceSubject(
-            model_id=args.model + ("-untrained" if args.untrained else ""),
-            model=model,
-            tokenizer=tokenizer,
-            region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
-            use_localizer=args.localize,
-            localizer_kwargs=localizer_kwargs
-        )
+    # Collect metrics
+    obj_corrs = [get_attr(r, 'objective_alignment_score') for r in all_results]
+    llm_corrs = [get_attr(r, 'original_alignment_score') for r in all_results]
+    
+    obj_corrs_norm = [get_attr(r, 'objective_normalized_alignment_score') for r in all_results]
+    llm_corrs_norm = [get_attr(r, 'original_normalized_alignment_score') for r in all_results]
+    
+    obj_vars = [get_diag(r, 'objective_explained_variance') for r in all_results]
+    llm_vars = [get_diag(r, 'obj_llm_explained_variance') for r in all_results] # Combined
+    
+    # Helper to average ignoring Nones
+    def safe_mean(lst):
+        valid = [x for x in lst if x is not None]
+        return float(np.mean(valid)) if valid else None
 
-    # Score
-    print(f"Loading benchmark: {args.benchmark}")
-    benchmark = load_benchmark(args.benchmark)
-
-    print("Scoring model...")
-    results = score(subject, benchmark)
-    print(f"Score: {results}")
+    avg_obj_corr = safe_mean(obj_corrs)
+    avg_llm_corr = safe_mean(llm_corrs)
+    avg_obj_corr_norm = safe_mean(obj_corrs_norm)
+    avg_llm_corr_norm = safe_mean(llm_corrs_norm)
+    avg_obj_var = safe_mean(obj_vars)
+    avg_llm_var = safe_mean(llm_vars)
     
     # Create output directory
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    # 1. Extract info for JSON (before cleaning attributes)
+    # 1. Create structured info.json
     import datetime
     import sys
-    
-    # Extract diagnostics safely
-    diagnostics = results.attrs.get('diagnostics', {})
-    if isinstance(diagnostics, str):
-        # In case it's already a string (unlikely here but good practice)
-        try:
-            import ast
-            diagnostics = ast.literal_eval(diagnostics)
-        except:
-            diagnostics = {}
             
     info = {
         "model": args.model,
@@ -147,16 +194,31 @@ def main():
         "num_units": args.num_units,
         "device": args.device,
         "decay_rate": args.decay_rate if "locality_gpt" in args.model else None,
-        "score": float(results.values) if results.values.size == 1 else results.values.tolist(),
-        "alignment_score": float(results.values) if results.values.size == 1 else results.values.tolist(),
-        "original_alignment_score": results.attrs.get('original_alignment_score', None),
-        "original_normalized_alignment_score": results.attrs.get('original_normalized_alignment_score', None),
-        "objective_explained_variance": diagnostics.get('objective_explained_variance', None) if isinstance(diagnostics, dict) else None,
-        "obj_llm_explained_variance": diagnostics.get('obj_llm_explained_variance', None) if isinstance(diagnostics, dict) else None,
         "timestamp": datetime.datetime.now().isoformat(),
         "args": vars(args),
-        "command": " ".join(sys.argv)
+        "command": " ".join(sys.argv),
+        "scores": {
+            "correlation": {
+                "objective": avg_obj_corr,
+                "llm": avg_llm_corr
+            },
+            "correlation_normalized": {
+                "objective": avg_obj_corr_norm,
+                "llm": avg_llm_corr_norm
+            },
+            "explained_variance": {
+                "objective": avg_obj_var,
+                "llm": avg_llm_var,
+                "partial": avg_score # Partial R2 is the main score
+            }
+        }
     }
+
+    # Use the last result object for saving NetCDF (it contains the full structure)
+    # Ideally we would average the NetCDF too but that's complex. 
+    # Saving the last seed's result is a reasonable proxy for the structure, 
+    # but the info.json contains the averaged scalars.
+    results = all_results[-1]
 
     # 2. Fix Serialization Error: Clean attributes
     # The error "Invalid value for attr 'raw': <xarray.Score ...>" happens because 
@@ -187,7 +249,7 @@ def main():
     # 3. Save results (NetCDF)
     save_path_nc = os.path.join(args.output_dir, "score.nc")
     results.to_netcdf(save_path_nc)
-    print(f"Results saved to: {save_path_nc}")
+    print(f"Results (Seed 4) saved to: {save_path_nc}")
 
     # 4. Save info.json
     save_path_json = os.path.join(args.output_dir, "info.json")
