@@ -18,6 +18,9 @@ def main():
     parser.add_argument("--save_path", default=None, help="Directory to save results (overrides --output_dir)")
     parser.add_argument("--decay-rate", type=float, default=1.0, help="Decay rate for LocalityGPT2")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for localization")
+    parser.add_argument("--topic_wise_cv", action="store_true", help="Use topic-wise cross-validation (GroupKFold)")
+    parser.add_argument("--no_topic_wise_cv", dest="topic_wise_cv", action="store_false", help="Use random cross-validation (KFold)")
+    parser.set_defaults(topic_wise_cv=True)
     args = parser.parse_args()
 
     # Handle save_path logic
@@ -130,6 +133,9 @@ def main():
         # Score
         print(f"Loading benchmark: {args.benchmark}")
         benchmark = load_benchmark(args.benchmark)
+        if hasattr(benchmark, 'topic_wise_cv'):
+            print(f"Setting topic_wise_cv to {args.topic_wise_cv}")
+            benchmark.topic_wise_cv = args.topic_wise_cv
     
         print("Scoring model...")
         results = score(subject, benchmark)

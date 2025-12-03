@@ -22,6 +22,9 @@ def main():
     parser.add_argument("--save_path", default="data/scores/hierarchical_alignment", help="Directory to save results")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for localization")
     parser.add_argument("--depths", type=int, nargs='+', default=[1, 2, 3, 4, 6, 8, 12], help="Depths to evaluate")
+    parser.add_argument("--topic_wise_cv", action="store_true", help="Use topic-wise cross-validation (GroupKFold)")
+    parser.add_argument("--no_topic_wise_cv", dest="topic_wise_cv", action="store_false", help="Use random cross-validation (KFold)")
+    parser.set_defaults(topic_wise_cv=True)
     args = parser.parse_args()
 
     # Device setup
@@ -42,6 +45,9 @@ def main():
     # Load benchmark once
     print(f"Loading benchmark: {args.benchmark}")
     benchmark = load_benchmark(args.benchmark)
+    if hasattr(benchmark, 'topic_wise_cv'):
+        print(f"Setting topic_wise_cv to {args.topic_wise_cv}")
+        benchmark.topic_wise_cv = args.topic_wise_cv
 
     results_by_depth = []
 

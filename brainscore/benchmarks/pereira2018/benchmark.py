@@ -187,12 +187,13 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
     Alignment is evaluated via Partial R2 with objective features.
     """
 
-    def __init__(self, experiment: str, ceiling_s3_kwargs: dict = None):
+    def __init__(self, experiment: str, ceiling_s3_kwargs: dict = None, topic_wise_cv: bool = True):
         self.data = self._load_data(experiment)
         from alignment.metrics.linear_partial_r2 import linear_partial_r2
         self.metric = linear_partial_r2
         identifier = f'Pereira2018.{experiment}-partialr2'
         self.experiment = experiment
+        self.topic_wise_cv = topic_wise_cv
         
         ceiling = None
         if ceiling_s3_kwargs:
@@ -277,12 +278,18 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         passage_labels_aligned = self.data['passage_label'].values[y_indices]
         
         # Define splits
-        # Topic-Held-Out: Use GroupKFold with passage labels
-        from sklearn.model_selection import GroupKFold
-        # 10 splits seems reasonable given ~60-80 passages
-        n_splits = 10
-        gkf = GroupKFold(n_splits=n_splits)
-        splits = list(gkf.split(X_llm, y_aligned, groups=passage_labels_aligned))
+        if self.topic_wise_cv:
+            # Topic-Held-Out: Use GroupKFold with passage labels
+            from sklearn.model_selection import GroupKFold
+            n_splits = 10
+            gkf = GroupKFold(n_splits=n_splits)
+            splits = list(gkf.split(X_llm, y_aligned, groups=passage_labels_aligned))
+        else:
+            # Random CV: Use KFold with shuffling
+            from sklearn.model_selection import KFold
+            n_splits = 10
+            kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+            splits = list(kf.split(X_llm, y_aligned))
         
         # Compute score
         score, diagnostics = self.metric(
