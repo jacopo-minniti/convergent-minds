@@ -57,7 +57,13 @@ class HierarchicalGPT2(HuggingfaceSubject):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
-        super().__init__(model_id=model_id,
+        # Create a unique model ID for caching purposes in localize_fed10
+        # This prevents cache collisions when running different depths
+        unique_model_id = f"{model_id}-depth-{depth}"
+        if untrained:
+            unique_model_id += "-untrained"
+        
+        super().__init__(model_id=unique_model_id,
                          region_layer_mapping=region_layer_mapping,
                          model=model,
                          tokenizer=tokenizer,
