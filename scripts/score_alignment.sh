@@ -18,19 +18,14 @@ export CUDA_LAUNCH_BLOCKING=1
 
 source .venv/bin/activate
 
-# python main.py \
-#     --model locality_gpt \
-#     --benchmark Pereira2018.243sentences-linear \
-#     --save_path results/localized/locality_gpt2/v2_untrained_pereira2018_linear_0.3 \
-#     --num-units 128 \
-#     --decay-rate 1.0 \
-#     --localize \
-#     --untrained
+MODEL=locality_gpt2
+DECAY_RATE=0.5
 
 python main.py \
-    --model gpt2 \
+    --model ${MODEL} \
     --benchmark Pereira2018.243sentences-partialr2 \
-    --save_path data/scores/partialr2_localized_128/gpt2/untrained_pereira2018_linear \
+    --save_path "data/scores/partialr2_localized_128/${MODEL}/untrained_pereira2018_linear_${DECAY_RATE}" \
     --num-units 128 \
+    --decay-rate ${DECAY_RATE} \
     --localize \
     --untrained
