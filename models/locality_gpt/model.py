@@ -172,7 +172,13 @@ class LocalityGPT2(HuggingfaceSubject):
 
         # Replace standard attention layers with our locality-biased version
         for i, layer in enumerate(model.transformer.h):
-            layer.attn = LocalityGPT2Attention(model.config, layer_idx=i, decay_rate=decay_rate)
+            old_attn = layer.attn
+            new_attn = LocalityGPT2Attention(model.config, layer_idx=i, decay_rate=decay_rate)
+            
+            # Copy weights from the original attention layer
+            new_attn.load_state_dict(old_attn.state_dict())
+            
+            layer.attn = new_attn
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, truncation_side='left')
         if tokenizer.pad_token is None:

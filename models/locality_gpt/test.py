@@ -128,3 +128,45 @@ def test_attention_zero_decay_rate(gpt2_config):
     torch.testing.assert_close(attn_weights[0, 0, 2, 0], attn_weights[0, 0, 2, 1])
     torch.testing.assert_close(attn_weights[0, 0, 2, 1], attn_weights[0, 0, 2, 2])
 
+
+def test_locality_gpt2_matches_gpt2_when_decay_zero():
+    """
+    Tests that LocalityGPT2 with decay_rate=0.0 and untrained=True 
+    is mathematically identical to a standard untrained GPT2 with the same seed.
+    """
+    model_id = "gpt2"
+    dummy_mapping = {'dummy_region': 0}
+    seed = 42
+    
+    # 1. Initialize standard GPT2
+    torch.manual_seed(seed)
+    config = AutoConfig.from_pretrained(model_id)
+    config.attn_implementation = "eager"
+    standard_model = GPT2LMHeadModel(config)
+    
+    # 2. Initialize LocalityGPT2
+    torch.manual_seed(seed)
+    locality_subject = LocalityGPT2(
+        model_id,
+        region_layer_mapping=dummy_mapping,
+        untrained=True,
+        decay_rate=0.0,
+        device="cpu"
+    )
+    locality_model = locality_subject.model
+    
+    # 3. Verify weights are identical
+    # Check a specific weight (e.g., first layer attention weight)
+    w_standard = standard_model.transformer.h[0].attn.c_attn.weight
+    w_locality = locality_model.transformer.h[0].attn.c_attn.weight
+    
+    torch.testing.assert_close(w_locality, w_standard, msg="Weights should be identical")
+    
+    # 4. Verify outputs are identical
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+    
+    with torch.no_grad():
+        out_standard = standard_model(input_ids).logits
+        out_locality = locality_model(input_ids).logits
+        
+    torch.testing.assert_close(out_locality, out_standard, msg="Outputs should be identical")
