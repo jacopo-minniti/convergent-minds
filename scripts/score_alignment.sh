@@ -21,7 +21,7 @@ source .venv/bin/activate
 MODEL=locality_gpt2
 DECAY_RATE=0.5
 
-python main.py \
+python score_alignment.py \
     --model ${MODEL} \
     --benchmark Pereira2018.243sentences-partialr2 \
     --save_path "data/scores/partialr2_localized_128/${MODEL}/untrained_pereira2018_linear_${DECAY_RATE}" \

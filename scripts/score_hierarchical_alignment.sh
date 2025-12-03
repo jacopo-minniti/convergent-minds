@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=hierarchical_alignment
-#SBATCH --time=02:00:00
+#SBATCH --time=00:30:00
 #SBATCH --gpus-per-node=l40s:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
@@ -21,11 +21,11 @@ source .venv/bin/activate
 MODEL=gpt2
 SAVE_PATH="data/scores/hierarchical_alignment/${MODEL}_untrained"
 
-python scripts/score_hierarchical_alignment.py \
+python score_hierarchical_alignment.py \
     --model ${MODEL} \
     --benchmark Pereira2018.243sentences-partialr2 \
     --save_path ${SAVE_PATH} \
-    --num-units 256 \
+    --num-units 128 \
     --localize \
     --untrained \
     --depths 1 2 3 4 6 8 12
