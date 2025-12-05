@@ -194,6 +194,7 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         identifier = f'Pereira2018.{experiment}-partialr2'
         self.experiment = experiment
         self.topic_wise_cv = topic_wise_cv
+        self.use_surprisal = False
         
         ceiling = None
         if ceiling_s3_kwargs:
@@ -227,13 +228,24 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
                                          recording_type=ArtificialSubject.RecordingType.fMRI)
         stimuli = self.data['stimulus']
         passages = self.data['passage_label'].values
+        if self.use_surprisal:
+             candidate.start_behavioral_task(ArtificialSubject.Task.reading_times)
+
         predictions = []
+        surprisals = []
         for passage in sorted(set(passages)):  # go over individual passages, sorting to keep consistency across runs
             passage_indexer = [stimulus_passage == passage for stimulus_passage in passages]
             passage_stimuli = stimuli[passage_indexer]
-            passage_predictions = candidate.digest_text(passage_stimuli.values)['neural']
+            
+            output = candidate.digest_text(passage_stimuli.values)
+            passage_predictions = output['neural']
             passage_predictions['stimulus_id'] = 'presentation', passage_stimuli['stimulus_id'].values
             predictions.append(passage_predictions)
+            
+            if self.use_surprisal:
+                passage_surprisal = output['behavior']
+                passage_surprisal['stimulus_id'] = 'presentation', passage_stimuli['stimulus_id'].values
+                surprisals.append(passage_surprisal)
         predictions = xr.concat(predictions, dim='presentation')
         
         # Load X_obj
@@ -262,6 +274,20 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         # Reorder X_obj
         indices = [obj_id_to_idx[sid] for sid in pred_stimulus_ids]
         X_obj_aligned = X_obj[indices]
+
+        if self.use_surprisal:
+            surprisals = xr.concat(surprisals, dim='presentation')
+            # Ensure surprisals are aligned exactly as predictions (they should be, but let's be safe)
+            # predictions and surprisals are built in the same loop, so they match order.
+            # But X_obj is reordered to match predictions.
+            # Surprisal is already matching predictions.
+            # Convert to numpy and reshape
+            surprisal_values = surprisals.values[:, np.newaxis] # (n_samples, 1)
+            
+            # Concatenate to X_obj_aligned
+            print(f"Adding Surprisal to Objective Features. Old shape: {X_obj_aligned.shape}")
+            X_obj_aligned = np.hstack([X_obj_aligned, surprisal_values])
+            print(f"New shape: {X_obj_aligned.shape}")
         
         # Prepare X_llm and y
         X_llm = predictions.values
