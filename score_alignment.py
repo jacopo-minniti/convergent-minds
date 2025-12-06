@@ -122,13 +122,18 @@ def main():
                 'hidden_dim': hidden_dim
             }
             
+            representation_token_index = -1
+            if 'bert' in args.model:
+                 representation_token_index = 0
+            
             subject = HuggingfaceSubject(
                 model_id=args.model + ("-untrained" if args.untrained else ""),
                 model=model,
                 tokenizer=tokenizer,
                 region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
                 use_localizer=args.localize,
-                localizer_kwargs=localizer_kwargs
+                localizer_kwargs=localizer_kwargs,
+                representation_token_index=representation_token_index
             )
     
         # Score
