@@ -97,6 +97,7 @@ class HuggingfaceSubject(ArtificialSubject):
             localizer_kwargs=None,
             device: str = None,
             task_heads: Union[None, Dict[ArtificialSubject.Task, Callable]] = None,
+            representation_token_index: int = -1,
     ):
         """
             :param model_id: the model id i.e. name
