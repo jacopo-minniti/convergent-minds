@@ -233,6 +233,22 @@ def main():
                 "objective": avg_obj_var,
                 "llm": avg_llm_var,
                 "partial": avg_score # Partial R2 is the main score
+            },
+            "scores_per_seed": {
+                "correlation": {
+                    "objective": obj_corrs,
+                    "llm": llm_corrs
+                },
+                "correlation_normalized": {
+                    "objective": obj_corrs_norm,
+                    "llm": llm_corrs_norm
+                },
+                "explained_variance": {
+                     "objective": obj_vars,
+                     "llm": llm_vars,
+                     # We need to extract the partial score per seed from all_results
+                     "partial": [float(r.values) if r.values.size == 1 else np.mean(r.values) for r in all_results]
+                }
             }
         }
     }
