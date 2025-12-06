@@ -5,11 +5,14 @@ import torch
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import datetime
+import sys
+# Force local import of brainscore by adding the current directory to sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from brainscore import score, load_benchmark, ArtificialSubject
 from brainscore.model_helpers.huggingface import get_layer_names
 from models.hierarchical_gpt import HierarchicalGPT2
-import datetime
-import sys
 
 def main():
     parser = argparse.ArgumentParser(description="Hierarchical Alignment Analysis")
@@ -24,6 +27,7 @@ def main():
     parser.add_argument("--depths", type=int, nargs='+', default=[1, 2, 3, 4, 6, 8, 12], help="Depths to evaluate")
     parser.add_argument("--topic_wise_cv", action="store_true", help="Use topic-wise cross-validation (GroupKFold)")
     parser.add_argument("--no_topic_wise_cv", dest="topic_wise_cv", action="store_false", help="Use random cross-validation (KFold)")
+    parser.add_argument("--use_surprisal", action="store_true", help="Add aggregated surprisal as a feature")
     parser.set_defaults(topic_wise_cv=True)
     args = parser.parse_args()
 
@@ -48,6 +52,13 @@ def main():
     if hasattr(benchmark, 'topic_wise_cv'):
         print(f"Setting topic_wise_cv to {args.topic_wise_cv}")
         benchmark.topic_wise_cv = args.topic_wise_cv
+
+    if args.use_surprisal:
+        if hasattr(benchmark, 'use_surprisal'):
+            print("Enabling use_surprisal in benchmark")
+            benchmark.use_surprisal = True
+        else:
+            print("Warning: Benchmark does not support use_surprisal")
 
     results_by_depth = []
 
@@ -118,20 +129,41 @@ def main():
             # Let's assume the primary value is what we want, or check for a specific attribute if needed.
             # `main.py` saves `avg_score` as `partial`.
             
-            val = float(score_result.values) if score_result.values.size == 1 else np.mean(score_result.values)
-            depth_scores.append(val)
-            print(f"    Score: {val}")
+            # Extract scores
+            partial_score = float(score_result.values) if score_result.values.size == 1 else np.mean(score_result.values)
+            llm_score = score_result.attrs.get('original_normalized_alignment_score')
+            # If attributes are not preserved or different, we might need to look at raw attributes
+            if llm_score is None:
+                # Try fallback or just use 0 if not available (shouldn't happen with correct benchmark)
+                llm_score = 0.0
+                print("Warning: original_normalized_alignment_score not found in result attributes.")
+            
+            depth_scores.append({
+                "partial": partial_score,
+                "llm": llm_score
+            })
+            print(f"    Partial Score: {partial_score:.4f}, LLM Score: {llm_score:.4f}")
             
         # Average over seeds
-        avg_score = np.mean(depth_scores)
-        std_score = np.std(depth_scores)
+        partials = [d['partial'] for d in depth_scores]
+        llms = [d['llm'] for d in depth_scores]
+        
+        avg_partial = np.mean(partials)
+        std_partial = np.std(partials)
+        
+        avg_llm = np.mean(llms)
+        std_llm = np.std(llms)
+        
         results_by_depth.append({
             "depth": depth,
-            "score_mean": avg_score,
-            "score_std": std_score,
+            "partial_mean": avg_partial,
+            "partial_std": std_partial,
+            "llm_mean": avg_llm,
+            "llm_std": std_llm,
             "raw_scores": depth_scores
         })
-        print(f"  Depth {depth} Average Score: {avg_score:.4f} +/- {std_score:.4f}")
+        print(f"  Depth {depth} Avg Partial: {avg_partial:.4f} +/- {std_partial:.4f}")
+        print(f"  Depth {depth} Avg LLM: {avg_llm:.4f} +/- {std_llm:.4f}")
 
     # Save results
     results_df = pd.DataFrame(results_by_depth)
@@ -139,18 +171,35 @@ def main():
     results_df.to_csv(csv_path, index=False)
     print(f"Results saved to {csv_path}")
 
-    # Plot
+    # Plot 1: Normalized Partial R2
     plt.figure(figsize=(10, 6))
-    plt.errorbar(results_df["depth"], results_df["score_mean"], yerr=results_df["score_std"], fmt='-o', capsize=5)
+    plt.errorbar(results_df["depth"], results_df["partial_mean"], yerr=results_df["partial_std"], fmt='-o', capsize=5, label='Partial R²')
     plt.xlabel("Depth (Number of Transformer Blocks)")
     plt.ylabel("Normalized Partial R²")
-    plt.title(f"Hierarchical Alignment: {args.model} ({'Untrained' if args.untrained else 'Trained'})")
+    plt.title(f"Hierarchical Alignment: {args.model} ({'Untrained' if args.untrained else 'Trained'})\nNormalized Partial R²")
     plt.grid(True)
     plt.xticks(args.depths)
+    plt.legend()
     
-    plot_path = os.path.join(args.save_path, "depth_vs_alignment.png")
+    plot_path = os.path.join(args.save_path, "depth_vs_partial_r2.png")
     plt.savefig(plot_path)
-    print(f"Plot saved to {plot_path}")
+    print(f"Partial R2 Plot saved to {plot_path}")
+    plt.close()
+
+    # Plot 2: Normalized LLM-only R2
+    plt.figure(figsize=(10, 6))
+    plt.errorbar(results_df["depth"], results_df["llm_mean"], yerr=results_df["llm_std"], fmt='-s', capsize=5, color='orange', label='LLM-Only R²')
+    plt.xlabel("Depth (Number of Transformer Blocks)")
+    plt.ylabel("Normalized LLM-Only R²")
+    plt.title(f"Hierarchical Alignment: {args.model} ({'Untrained' if args.untrained else 'Trained'})\nNormalized LLM-Only R² (No Objective Features)")
+    plt.grid(True)
+    plt.xticks(args.depths)
+    plt.legend()
+    
+    plot_path_llm = os.path.join(args.save_path, "depth_vs_llm_r2.png")
+    plt.savefig(plot_path_llm)
+    print(f"LLM-Only Plot saved to {plot_path_llm}")
+    plt.close()
 
     # Save info.json
     info = {
