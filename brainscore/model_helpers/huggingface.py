@@ -44,7 +44,7 @@ def get_layer_names(model_id: str, model_type: str = None) -> List[str]:
         # OPT-like models
         "opt": "model.decoder.layers.{}",
         # BERT-like models
-        "bert": "encoder.layer.{}",
+        "bert": "bert.encoder.layer.{}",
         "roberta": "encoder.layer.{}",
         "distilbert": "transformer.layer.{}",
         "deberta": "encoder.layer.{}",
