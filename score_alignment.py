@@ -1,4 +1,8 @@
 import os
+import sys
+# Force local import of brainscore by adding the current directory to sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import argparse
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
@@ -6,11 +10,6 @@ from brainscore import score, load_benchmark, ArtificialSubject
 from brainscore.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
 from models.locality_gpt.model import LocalityGPT2
 
-
-
-import sys
-# Force local import of brainscore by adding the current directory to sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def main():
     parser = argparse.ArgumentParser(description="Simple Pipeline for BrainScore")
