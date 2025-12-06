@@ -275,6 +275,9 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         indices = [obj_id_to_idx[sid] for sid in pred_stimulus_ids]
         X_obj_aligned = X_obj[indices]
 
+        # Prepare X_llm and y
+        X_llm = predictions.values
+
         if self.use_surprisal:
             surprisals = xr.concat(surprisals, dim='presentation')
             # Ensure surprisals are aligned exactly as predictions (they should be, but let's be safe)
@@ -284,13 +287,10 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             # Convert to numpy and reshape
             surprisal_values = surprisals.values[:, np.newaxis] # (n_samples, 1)
             
-            # Concatenate to X_obj_aligned
-            print(f"Adding Surprisal to Objective Features. Old shape: {X_obj_aligned.shape}")
-            X_obj_aligned = np.hstack([X_obj_aligned, surprisal_values])
-            print(f"New shape: {X_obj_aligned.shape}")
-        
-        # Prepare X_llm and y
-        X_llm = predictions.values
+            # Concatenate to X_llm
+            print(f"Adding Surprisal to LLM Features. Old shape: {X_llm.shape}")
+            X_llm = np.hstack([X_llm, surprisal_values])
+            print(f"New shape: {X_llm.shape}")
         
         # Align y (self.data) to predictions
         # Use manual alignment via stimulus_id to avoid xarray indexing issues
