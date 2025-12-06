@@ -365,33 +365,44 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
                     print(f"Warning: Failed to normalize Objective correlation: {e}")
                     objective_normalized_alignment_score = None
             
-            # Normalize Partial R2
-            # Assuming ceiling is Pearson r, ceiling explained variance is r^2
-            # We aggregate ceiling across neuroids (median/mean) to get a scalar ceiling R2?
-            # Or we normalize per neuroid and then aggregate?
-            # The metric returns aggregated score.
-            # Let's try to normalize the aggregated score by the aggregated ceiling R2.
+            # Normalize Variances (R2)
             try:
                 # Ceiling is per neuroid.
-                # We need to align ceiling to the neuroids we have (y_aligned is (n_samples, n_neuroids))
-                # y_aligned comes from self.data.
-                # self.ceiling should match self.data neuroids.
-                # Let's check if we can get a scalar ceiling R2.
-                ceiling_values = self.ceiling.values # (n_neuroids,)
                 # If ceiling is r, r^2 is explained variance ceiling.
+                ceiling_values = self.ceiling.values # (n_neuroids,)
                 ceiling_r2 = ceiling_values ** 2
                 # Take median ceiling R2 (consistent with median aggregation in metric)
                 median_ceiling_r2 = np.median(ceiling_r2)
                 
                 if median_ceiling_r2 > 0:
                     normalized_partial_r2 = score / median_ceiling_r2
+                    
+                    objective_explained_variance = diagnostics.get('objective_explained_variance')
+                    if objective_explained_variance is not None:
+                         objective_normalized_explained_variance = objective_explained_variance / median_ceiling_r2
+                    else:
+                         objective_normalized_explained_variance = None
+
+                    obj_llm_explained_variance = diagnostics.get('obj_llm_explained_variance')
+                    if obj_llm_explained_variance is not None:
+                         obj_llm_normalized_explained_variance = obj_llm_explained_variance / median_ceiling_r2
+                    else:
+                         obj_llm_normalized_explained_variance = None
+                         
                 else:
                     normalized_partial_r2 = 0.0
+                    objective_normalized_explained_variance = 0.0
+                    obj_llm_normalized_explained_variance = 0.0
             except Exception as e:
-                print(f"Warning: Failed to normalize Partial R2: {e}")
+                print(f"Warning: Failed to normalize Variances: {e}")
                 normalized_partial_r2 = None
+                objective_normalized_explained_variance = None
+                obj_llm_normalized_explained_variance = None
+        else:
+             objective_normalized_explained_variance = None
+             obj_llm_normalized_explained_variance = None
 
-        
+
         # Wrap in Score object
         final_score = Score(score)
         final_score.attrs['diagnostics'] = diagnostics
@@ -410,5 +421,11 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             
         if normalized_partial_r2 is not None:
             final_score.attrs['normalized_partial_r2'] = normalized_partial_r2
+            
+        if objective_normalized_explained_variance is not None:
+            final_score.attrs['objective_normalized_explained_variance'] = objective_normalized_explained_variance
+            
+        if obj_llm_normalized_explained_variance is not None:
+            final_score.attrs['obj_llm_normalized_explained_variance'] = obj_llm_normalized_explained_variance
         
         return final_score
