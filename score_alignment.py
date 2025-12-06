@@ -7,6 +7,11 @@ from brainscore.model_helpers.huggingface import HuggingfaceSubject, get_layer_n
 from models.locality_gpt.model import LocalityGPT2
 
 
+
+import sys
+# Force local import of brainscore by adding the current directory to sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 def main():
     parser = argparse.ArgumentParser(description="Simple Pipeline for BrainScore")
     parser.add_argument("--model", default="distilgpt2", help="Model identifier (e.g., distilgpt2, gpt2)")
