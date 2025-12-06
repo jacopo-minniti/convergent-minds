@@ -22,8 +22,8 @@ source .venv/bin/activate
 # Configurable variables
 ############################################
 
-MODEL="locality_gpt2"
-DECAY_RATE="-0.3"
+MODEL="bert-base-uncased"
+DECAY_RATE="0.0"
 NUM_UNITS=256
 
 UNTRAINED=true            # true or false
