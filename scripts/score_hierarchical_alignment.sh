@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=hierarchical_alignment
-#SBATCH --time=00:30:00
+#SBATCH --time=00:15:00
 #SBATCH --gpus-per-node=l40s:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=8G
+#SBATCH --mem=4G
 #SBATCH --output=/scratch/jacopo04/convergent-minds/logs/hierarchical-%j.out
 #SBATCH --error=/scratch/jacopo04/convergent-minds/logs/hierarchical-%j.err
 #SBATCH -D /scratch/jacopo04/convergent-minds
@@ -26,7 +26,7 @@ MODEL="gpt2"
 NUM_UNITS=512
 
 UNTRAINED=false            # true or false
-USE_TOPIC_WISE_CV=true     # true or false
+USE_TOPIC_WISE_CV=false     # true or false
 USE_SURPRISAL=false        # true or false
 
 ############################################

@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=alignment
-#SBATCH --time=00:30:00
+#SBATCH --time=00:10:00
 #SBATCH --gpus-per-node=l40s:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=5G
+#SBATCH --mem=4G
 #SBATCH --output=/scratch/jacopo04/convergent-minds/logs/alignment-%j.out
 #SBATCH --error=/scratch/jacopo04/convergent-minds/logs/alignment-%j.err
 #SBATCH -D /scratch/jacopo04/convergent-minds
@@ -22,12 +22,12 @@ source .venv/bin/activate
 # Configurable variables
 ############################################
 
-MODEL="bert-base-uncased"
+MODEL="gpt2"
 DECAY_RATE="0.0"
-NUM_UNITS=256
+NUM_UNITS=512
 
 UNTRAINED=true            # true or false
-USE_TOPIC_WISE_CV=true   # true or false
+USE_TOPIC_WISE_CV=false   # true or false
 USE_SURPRISAL=false      # true or false
 
 ############################################
