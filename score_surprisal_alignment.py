@@ -158,11 +158,7 @@ def main():
     # Usually stimuli['sentence'] or stimuli['word'] etc.
     # For Pereira, it's 'sentence'.
     sentences = stimuli['sentence'].values
-    topics = stimuli['min_topic'].values # Assuming min_topic is the topic label
-    # Or 'passage_label' which is more granular? 
-    # User said "Each topic block". Pereira has 384 sentences, grouped by topics/passages.
-    # Let's use 'passage_label' as topic identifier as it aligns with "topic block".
-    # Confirming with previous code usage (groups=passage_labels_aligned).
+
     passage_labels = assembly['passage_label'].values
     
     # IMPORTANT: Ensure sentences are sorted by presentation order if we do moving baseline
