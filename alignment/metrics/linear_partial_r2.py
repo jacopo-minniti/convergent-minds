@@ -12,7 +12,7 @@ def linear_partial_r2(
     X_llm: np.ndarray,
     y: np.ndarray,
     splits: List[Tuple[np.ndarray, np.ndarray]],
-    alpha_grid: np.ndarray = np.logspace(0, 5, 6),
+    alpha_grid: np.ndarray = np.logspace(-1, 5, 7),
 ) -> Tuple[float, Dict[str, Any]]:
     """
     Compute ΔR² brain alignment score using multi-output ridge and the given CV splits.
