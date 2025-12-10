@@ -39,6 +39,7 @@ def linear_partial_r2(
     # Debugging: track alphas
     alphas_baseline = []
     alphas_llm = []
+    alphas_combined = []
     
     logger.info(f"linear_partial_r2 input shapes: X_obj={X_obj.shape}, X_llm={X_llm.shape}, y={y.shape}")
     logger.info(f"X_obj stats: mean={np.mean(X_obj):.4f}, std={np.std(X_obj):.4f}, min={np.min(X_obj):.4f}, max={np.max(X_obj):.4f}")
@@ -83,25 +84,18 @@ def linear_partial_r2(
         model_combined = RidgeCV(alphas=alpha_grid)
         model_combined.fit(X_combined_train_scaled, y_train)
         y_pred_combined_test = model_combined.predict(X_combined_test_scaled)
+        if hasattr(model_combined, 'alpha_'):
+            alphas_combined.append(model_combined.alpha_)
 
-        # 3.3 LLM residual model (predicts residuals from baseline)
-        # First, get residuals from baseline model on training data
-        y_train_residuals = y_train - model_baseline.predict(X_obj_train_scaled)
-        
-        # Train LLM model to predict these residuals
-        model_llm = RidgeCV(alphas=alpha_grid)
-        model_llm.fit(X_llm_train_scaled, y_train_residuals)
-        residual_pred_test = model_llm.predict(X_llm_test_scaled)
-        if hasattr(model_llm, 'alpha_'):
-            alphas_llm.append(model_llm.alpha_)
-        
-        # Combined prediction = baseline + LLM residual prediction
-        y_pred_combined = y_pred_baseline_test + residual_pred_test
+        # Use Joint Model predictions for combined performance
+        y_pred_combined = y_pred_combined_test
         
         # --- New: LLM Only Correlation ---
         model_llm_only = RidgeCV(alphas=alpha_grid)
         model_llm_only.fit(X_llm_train_scaled, y_train)
         y_pred_llm_only = model_llm_only.predict(X_llm_test_scaled)
+        if hasattr(model_llm_only, 'alpha_'):
+            alphas_llm.append(model_llm_only.alpha_)
         
         # Pearson r per neuroid
         # Centering
@@ -195,6 +189,9 @@ def linear_partial_r2(
     if alphas_llm:
         avg_alpha_l = np.mean(alphas_llm)
         logger.info(f"Average LLM Alpha: {avg_alpha_l}")
+    if alphas_combined:
+        avg_alpha_c = np.mean(alphas_combined)
+        logger.info(f"Average Combined Alpha: {avg_alpha_c}")
 
     diagnostics = {
         "r2_baseline_per_split_neuroid": r2_baseline_splits,
@@ -208,7 +205,8 @@ def linear_partial_r2(
         "original_alignment_score": original_alignment_score,
         "objective_alignment_score": objective_alignment_score,
         "alphas_baseline": alphas_baseline,
-        "alphas_llm": alphas_llm
+        "alphas_llm": alphas_llm,
+        "alphas_combined": alphas_combined
     }
     
     return float(alignment_score), diagnostics
