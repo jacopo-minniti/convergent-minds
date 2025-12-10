@@ -295,6 +295,8 @@ def main():
         use_localizer=args.localize,
         localizer_kwargs=localizer_kwargs
     )
+    subject.start_neural_recording(recording_target=ArtificialSubject.RecordingTarget.language_system,
+                                   recording_type=ArtificialSubject.RecordingType.fMRI)
     
     # We need to run the subject on the benchmark to get 'neural' (activations)
     # But we want to inject surprisal into the features before the final regression.
