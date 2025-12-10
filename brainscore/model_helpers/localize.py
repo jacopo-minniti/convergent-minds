@@ -142,7 +142,7 @@ def localize_fed10(model_id: str,
     Localize the model by selecting the top `top_k` units.
     """
 
-    save_path = f"{BRAINIO_CACHE}/{model_id}_topk={top_k}_language_mask.npy"
+    save_path = f"{BRAINIO_CACHE}/{model_id}_global_topk={top_k}_language_mask.npy"
 
     if os.path.exists(save_path):
         logger.debug(f"Loading language mask from {save_path}")
