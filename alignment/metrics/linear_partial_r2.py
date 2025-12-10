@@ -32,6 +32,7 @@ def linear_partial_r2(
     # Storage for diagnostics
     r2_baseline_splits = []
     r2_combined_splits = []
+    r2_llm_splits = [] # New: LLM-only R2
     delta_r2_splits = []
     pearson_r_splits = [] # New: for LLM-only Pearson r
     pearson_r_objective_splits = [] # New: for Objective-only Pearson r
@@ -112,6 +113,26 @@ def linear_partial_r2(
         
         pearson_r = np.sum(y_test_c * y_pred_c, axis=0) / (y_test_norm * y_pred_norm)
         pearson_r_splits.append(pearson_r)
+        
+        # --- New: LLM Only R2 ---
+        sse_llm = np.sum((y_test - y_pred_llm_only)**2, axis=0)
+        # sst_test is already calculated below (using test mean)
+        # We need to ensure we use the same SST for consistency.
+        # Let's move SST calculation up or duplicate it for clarity.
+        
+        # Compute SST using Test Mean (Standard R2)
+        y_test_mean = np.mean(y_test, axis=0)
+        sst_test = np.sum((y_test - y_test_mean)**2, axis=0)
+        sst_test[sst_test == 0] = 1e-10
+        
+        r2_llm = 1 - sse_llm / sst_test
+        # We need a storage for this
+        # But wait, local variable scope.
+        # I'll initializing lists at the top in a separate change or just append to diagnostics at the end
+        # forcing me to edit the top too.
+        # For now, let's keep it local and append to a new list 'r2_llm_splits' which I will define via multi-replace or just assume I edit top next.
+        # I'll assume I will add `r2_llm_splits = []` at the top in the next step.
+        # Just putting the calc here.
         # ---------------------------------
         
         # --- New: Objective Only Correlation ---
@@ -125,24 +146,16 @@ def linear_partial_r2(
         # ---------------------------------------
 
         # 4.3 R² computation per neuroid
-        # Compute R² manually to match standard sklearn r2_score (which uses mean of y_true/y_test)
-        # SST_j = sum_i (y_test_j[i] - mean(y_test_j))²
-        
-        y_test_mean = np.mean(y_test, axis=0) # Use Test Mean to check variance explanation within the topic
+        # SST is now calculated above (sst_test)
         
         # Baseline R² (Test)
         sse_baseline = np.sum((y_test - y_pred_baseline_test)**2, axis=0)
-        sst_baseline = np.sum((y_test - y_test_mean)**2, axis=0)
-        sst_test = sst_baseline # Alias for clarity
-        
-        sst_baseline[sst_baseline == 0] = 1e-10
-        r2_baseline = 1 - sse_baseline / sst_baseline
+        # sst_test calculated above
+        r2_baseline = 1 - sse_baseline / sst_test
         
         # Combined R² (Test)
         sse_combined = np.sum((y_test - y_pred_combined)**2, axis=0)
-        sst_combined = np.sum((y_test - y_test_mean)**2, axis=0) # Same SST
-        sst_combined[sst_combined == 0] = 1e-10
-        r2_combined = 1 - sse_combined / sst_combined
+        r2_combined = 1 - sse_combined / sst_test
         
         # ΔR²
         delta_r2 = r2_combined - r2_baseline
@@ -176,12 +189,16 @@ def linear_partial_r2(
         
         feature_corr = np.sum(y_pred_baseline_c * y_pred_c, axis=0) / (y_pred_baseline_norm * y_pred_norm)
         
+        feature_corr = np.sum(y_pred_baseline_c * y_pred_c, axis=0) / (y_pred_baseline_norm * y_pred_norm)
+        
         r2_baseline_splits.append(r2_baseline)
         r2_combined_splits.append(r2_combined)
+        r2_llm_splits.append(r2_llm)
         delta_r2_splits.append(delta_r2)
         
         if split_idx == 0:
             logger.info(f"Split 0: Median R2 Baseline (Test) = {np.median(r2_baseline):.4f}")
+            logger.info(f"Split 0: Median R2 LLM-Only (Test) = {np.median(r2_llm):.4f}")
             logger.info(f"Split 0: Median R2 Combined (Test) = {np.median(r2_combined):.4f}")
             logger.info(f"Split 0: Median Delta R2 (Test) = {np.median(delta_r2):.4f}")
             
@@ -217,6 +234,9 @@ def linear_partial_r2(
     
     r2_combined_per_split = [np.median(d) for d in r2_combined_splits]
     obj_llm_explained_variance = np.mean(r2_combined_per_split)
+
+    r2_llm_per_split = [np.median(d) for d in r2_llm_splits]
+    llm_explained_variance = np.mean(r2_llm_per_split)
     
     # Log alpha stats
     if alphas_baseline:
@@ -238,6 +258,7 @@ def linear_partial_r2(
         "score_per_split": score_per_split,
         "objective_explained_variance": objective_explained_variance,
         "obj_llm_explained_variance": obj_llm_explained_variance,
+        "llm_explained_variance": llm_explained_variance,
         "original_alignment_score": original_alignment_score,
         "objective_alignment_score": objective_alignment_score,
         "alphas_baseline": alphas_baseline,

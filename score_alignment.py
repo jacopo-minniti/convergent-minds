@@ -187,10 +187,11 @@ def main():
     llm_corrs_norm = [get_attr(r, 'original_normalized_alignment_score') for r in all_results]
     
     obj_vars = [get_diag(r, 'objective_explained_variance') for r in all_results]
-    llm_vars = [get_diag(r, 'obj_llm_explained_variance') for r in all_results] # Combined
+    joint_vars = [get_diag(r, 'obj_llm_explained_variance') for r in all_results] # Combined/Joint
+    llm_only_vars = [get_diag(r, 'llm_explained_variance') for r in all_results] # LLM Only (New)
     
     obj_vars_norm = [get_attr(r, 'objective_normalized_explained_variance') for r in all_results]
-    llm_vars_norm = [get_attr(r, 'obj_llm_normalized_explained_variance') for r in all_results]
+    joint_vars_norm = [get_attr(r, 'obj_llm_normalized_explained_variance') for r in all_results]
     partial_vars_norm = [get_attr(r, 'normalized_partial_r2') for r in all_results]
     
     # Helper to average ignoring Nones
@@ -199,13 +200,16 @@ def main():
         return float(np.mean(valid)) if valid else None
 
     avg_obj_corr = safe_mean(obj_corrs)
-    avg_llm_corr = safe_mean(llm_corrs)
+    avg_llm_corr = safe_mean(llm_corrs) # Pearson
     avg_obj_corr_norm = safe_mean(obj_corrs_norm)
     avg_llm_corr_norm = safe_mean(llm_corrs_norm)
+    
     avg_obj_var = safe_mean(obj_vars)
-    avg_llm_var = safe_mean(llm_vars)
+    avg_joint_var = safe_mean(joint_vars) # Joint
+    avg_llm_only_var = safe_mean(llm_only_vars)
+    
     avg_obj_var_norm = safe_mean(obj_vars_norm)
-    avg_llm_var_norm = safe_mean(llm_vars_norm)
+    avg_joint_var_norm = safe_mean(joint_vars_norm)
     avg_partial_var_norm = safe_mean(partial_vars_norm)
     
     # Create output directory
@@ -238,12 +242,13 @@ def main():
             },
             "explained_variance": {
                 "objective": avg_obj_var,
-                "llm": avg_llm_var,
-                "partial": avg_score # Partial R2 is the main score
+                "llm_only": avg_llm_only_var, # New
+                "joint": avg_joint_var, # Renamed from 'llm'
+                "partial": avg_score 
             },
             "explained_variance_normalized": {
                 "objective": avg_obj_var_norm,
-                "llm": avg_llm_var_norm,
+                "joint": avg_joint_var_norm, # Renamed
                 "partial": avg_partial_var_norm
             },
             "scores_per_seed": {
@@ -257,13 +262,13 @@ def main():
                 },
                 "explained_variance": {
                      "objective": obj_vars,
-                     "llm": llm_vars,
-                     # We need to extract the partial score per seed from all_results
+                     "llm_only": llm_only_vars,
+                     "joint": joint_vars,
                      "partial": [float(r.values) if r.values.size == 1 else np.mean(r.values) for r in all_results]
                 },
                 "explained_variance_normalized": {
                      "objective": obj_vars_norm,
-                     "llm": llm_vars_norm,
+                     "joint": joint_vars_norm,
                      "partial": partial_vars_norm
                 }
             }
