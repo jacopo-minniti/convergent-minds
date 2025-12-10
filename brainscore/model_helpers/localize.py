@@ -160,15 +160,31 @@ def localize_fed10(model_id: str,
 
         t_values_matrix[layer_idx], p_values_matrix[layer_idx] = scipy.stats.ttest_ind(sentences_actv, non_words_actv, axis=0, equal_var=False)
  
-    def is_topk(a, k=1):
-        _, rix = np.unique(-a, return_inverse=True)
-        return np.where(rix < k, 1, 0).reshape(a.shape)
-
-    t_values_matrix = np.nan_to_num(t_values_matrix, nan=-np.inf)
+    # Global Top-K Selection
+    # We want exactly 'top_k' units across the entire model (all layers combined)
     
+    # Flatten to find the global threshold
+    flat_t_values = t_values_matrix.flatten()
+    # Handle the case where we request more units than available
+    k = min(top_k, flat_t_values.size)
+    
+    # Use partition to find the k-th largest value efficiently
+    # -k because we want largest
+    idx = np.argpartition(flat_t_values, -k)[-k]
+    threshold = flat_t_values[idx]
+    
+    logger.info(f"Global Top-{k} localization: Threshold t-value = {threshold:.4f}")
+
     language_mask = np.zeros(t_values_matrix.shape, dtype=int)
-    for i in range(t_values_matrix.shape[0]):
-        language_mask[i] = is_topk(t_values_matrix[i], k=top_k)
+    # Select units >= threshold. 
+    # Warning: If there are ties exactly at the threshold, we might get > k units.
+    # For strict k, we might need to sort, but partition is usually fine for these continuous scores.
+    language_mask = (t_values_matrix >= threshold).astype(int)
+    
+    # Check actual count
+    actual_k = np.sum(language_mask)
+    if actual_k != k:
+         logger.warning(f"Selected {actual_k} units (requested {k}). This can happen due to ties.")
 
     np.save(save_path, language_mask)
     logger.debug(f"{model_id} language mask cached to {save_path}")
