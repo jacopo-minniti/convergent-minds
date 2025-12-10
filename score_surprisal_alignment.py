@@ -127,16 +127,34 @@ def main():
     os.makedirs(args.save_path, exist_ok=True)
 
     # 1. Load Model
-    print(f"Loading model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    # Load Model and Tokenizer
+    model_path = args.model
+    # Resolve possible paths: absolute, relative, or under 'models/' directory
+    if os.path.isabs(args.model) and os.path.isdir(args.model):
+        model_path = args.model
+    elif os.path.isdir(args.model):
+        model_path = args.model
+    else:
+        # Check if the model exists under the 'models' subdirectory
+        possible_path = os.path.join(os.getcwd(), "models", args.model)
+        if os.path.isdir(possible_path):
+            model_path = possible_path
+        else:
+            # Assume it's a HuggingFace model identifier
+            model_path = args.model
+            
+    print(f"Loading model from: {model_path}")
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
     if args.untrained:
-        config = AutoConfig.from_pretrained(args.model)
+        config = AutoConfig.from_pretrained(model_path)
         model = AutoModelForCausalLM.from_config(config)
     else:
-        model = AutoModelForCausalLM.from_pretrained(args.model)
+        model = AutoModelForCausalLM.from_pretrained(model_path)
+        config = model.config
+        
     model.to(device)
     model.eval()
 
