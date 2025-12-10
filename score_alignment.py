@@ -28,7 +28,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for localization")
     parser.add_argument("--topic_wise_cv", action="store_true", help="Use topic-wise cross-validation (GroupKFold)")
     parser.add_argument("--no_topic_wise_cv", dest="topic_wise_cv", action="store_false", help="Use random cross-validation (KFold)")
-    parser.add_argument("--use_surprisal", action="store_true", help="Add aggregated surprisal as a feature")
+
     parser.set_defaults(topic_wise_cv=True)
     args = parser.parse_args()
 
@@ -151,12 +151,7 @@ def main():
             print(f"Setting topic_wise_cv to {args.topic_wise_cv}")
             benchmark.topic_wise_cv = args.topic_wise_cv
             
-        if args.use_surprisal:
-            if hasattr(benchmark, 'use_surprisal'):
-                print("Enabling use_surprisal in benchmark")
-                benchmark.use_surprisal = True
-            else:
-                print("Warning: Benchmark does not support use_surprisal")
+
     
         print("Scoring model...")
         results = score(subject, benchmark)

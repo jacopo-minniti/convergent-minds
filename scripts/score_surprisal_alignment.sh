@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=hierarchical_alignment
-#SBATCH --time=00:15:00
+#SBATCH --job-name=surprisal_alignment
+#SBATCH --time=00:30:00
 #SBATCH --gpus-per-node=l40s:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=4G
-#SBATCH --output=/scratch/jacopo04/convergent-minds/logs/hierarchical-%j.out
-#SBATCH --error=/scratch/jacopo04/convergent-minds/logs/hierarchical-%j.err
+#SBATCH --mem=8G
+#SBATCH --output=/scratch/jacopo04/convergent-minds/logs/surprisal-%j.out
+#SBATCH --error=/scratch/jacopo04/convergent-minds/logs/surprisal-%j.err
 #SBATCH -D /scratch/jacopo04/convergent-minds
 
 module --force purge
@@ -26,8 +26,7 @@ MODEL="gpt2"
 NUM_UNITS=512
 
 UNTRAINED=false            # true or false
-USE_TOPIC_WISE_CV=false     # true or false
-
+USE_TOPIC_WISE_CV=true     # true or false
 
 ############################################
 # Build tag strings for path
@@ -38,8 +37,6 @@ TOPIC_TAG=""
 if [ "$USE_TOPIC_WISE_CV" = true ]; then
     TOPIC_TAG="topic_wise_cv"
 fi
-
-
 
 # Combine context tags, skip empty entries cleanly
 CTX_TAG=$(printf "%s" "$TOPIC_TAG" | sed 's/^_//;s/_$//;s/__/_/')
@@ -55,7 +52,7 @@ fi
 # Construct save path
 ############################################
 
-BASE="data/scores/hierarchical_alignment"
+BASE="data/scores/surprisal_alignment"
 
 # Add context tags only when non-empty
 if [ -n "$CTX_TAG" ]; then
@@ -75,13 +72,11 @@ echo "Saving to: ${SAVE_PATH}"
 # Run
 ############################################
 
-python score_hierarchical_alignment.py \
+python score_surprisal_alignment.py \
     --model "${MODEL}" \
     --benchmark "Pereira2018.243sentences-partialr2" \
     --save_path "${SAVE_PATH}" \
     --num-units "${NUM_UNITS}" \
     $( [ "$UNTRAINED" = true ] && echo "--untrained" ) \
     --localize \
-    --depths 1 2 3 4 5 6 7 8 9 10 11 12 \
-    $( [ "$USE_TOPIC_WISE_CV" = false ] && echo "--no_topic_wise_cv" ) \
-
+    $( [ "$USE_TOPIC_WISE_CV" = false ] && echo "--no_topic_wise_cv" )

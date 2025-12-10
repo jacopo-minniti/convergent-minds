@@ -28,7 +28,7 @@ NUM_UNITS=512
 
 UNTRAINED=true            # true or false
 USE_TOPIC_WISE_CV=false   # true or false
-USE_SURPRISAL=false      # true or false
+
 
 ############################################
 # Build tag strings for path
@@ -40,14 +40,10 @@ if [ "$USE_TOPIC_WISE_CV" = true ]; then
     TOPIC_TAG="topic_wise_cv"
 fi
 
-# Surprisal tag: include ONLY if active
-SURP_TAG=""
-if [ "$USE_SURPRISAL" = true ]; then
-    SURP_TAG="with_surprisal"
-fi
+
 
 # Combine context tags, skip empty entries cleanly
-CTX_TAG=$(printf "%s_%s" "$TOPIC_TAG" "$SURP_TAG" | sed 's/^_//;s/_$//;s/__/_/')
+CTX_TAG=$(printf "%s" "$TOPIC_TAG" | sed 's/^_//;s/_$//;s/__/_/')
 
 # Training tag: keep the trained / untrained convention
 if [ "$UNTRAINED" = true ]; then
@@ -103,4 +99,4 @@ python score_alignment.py \
     $( [ "$UNTRAINED" = true ] && echo "--untrained" ) \
     --localize \
     $( [ "$USE_TOPIC_WISE_CV" = false ] && echo "--no_topic_wise_cv" ) \
-    $( [ "$USE_SURPRISAL" = true ] && echo "--use_surprisal" )
+
