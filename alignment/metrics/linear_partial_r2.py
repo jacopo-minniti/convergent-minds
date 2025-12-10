@@ -125,21 +125,22 @@ def linear_partial_r2(
         # ---------------------------------------
 
         # 4.3 R² computation per neuroid
-        # Compute R² manually to match the spec:
-        # SST_j = sum_i (y_test_j[i] - mean(y_train_j))²
-        # Note: mean is from training data!
+        # Compute R² manually to match standard sklearn r2_score (which uses mean of y_true/y_test)
+        # SST_j = sum_i (y_test_j[i] - mean(y_test_j))²
         
-        y_train_mean = np.mean(y_train, axis=0)
+        y_test_mean = np.mean(y_test, axis=0) # Use Test Mean to check variance explanation within the topic
         
         # Baseline R² (Test)
         sse_baseline = np.sum((y_test - y_pred_baseline_test)**2, axis=0)
-        sst_baseline = np.sum((y_test - y_train_mean)**2, axis=0)
+        sst_baseline = np.sum((y_test - y_test_mean)**2, axis=0)
+        sst_test = sst_baseline # Alias for clarity
+        
         sst_baseline[sst_baseline == 0] = 1e-10
         r2_baseline = 1 - sse_baseline / sst_baseline
         
         # Combined R² (Test)
         sse_combined = np.sum((y_test - y_pred_combined)**2, axis=0)
-        sst_combined = np.sum((y_test - y_train_mean)**2, axis=0) # Same SST
+        sst_combined = np.sum((y_test - y_test_mean)**2, axis=0) # Same SST
         sst_combined[sst_combined == 0] = 1e-10
         r2_combined = 1 - sse_combined / sst_combined
         
@@ -148,6 +149,7 @@ def linear_partial_r2(
         
         # [DEBUG] Training R²
         # Baseline Train
+        y_train_mean = np.mean(y_train, axis=0)
         y_pred_baseline_train = model_baseline.predict(X_obj_train_scaled)
         sse_baseline_train = np.sum((y_train - y_pred_baseline_train)**2, axis=0)
         sst_train = np.sum((y_train - y_train_mean)**2, axis=0)
@@ -191,6 +193,7 @@ def linear_partial_r2(
             logger.info(f"Split 0: Median LLM-Only Pearson r = {np.median(pearson_r):.4f}")
             logger.info(f"Split 0: Median Objective Pearson r = {np.median(pearson_r_obj):.4f}")
             logger.info(f"Split 0: Median Feature Prediction Correlation = {np.median(feature_corr):.4f}")
+            logger.info(f"Split 0: Median SST (Test, using Test Mean) = {np.median(sst_test):.4f}")
 
     # 4.4 Aggregation
     # Median across neuroids per split
