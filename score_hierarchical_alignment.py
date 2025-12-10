@@ -130,7 +130,15 @@ def main():
             # `main.py` saves `avg_score` as `partial`.
             
             # Extract scores
-            partial_score = float(score_result.values) if score_result.values.size == 1 else np.mean(score_result.values)
+            raw_partial_score = float(score_result.values) if score_result.values.size == 1 else np.mean(score_result.values)
+            normalized_partial_score = score_result.attrs.get('normalized_partial_r2')
+
+            if normalized_partial_score is None:
+                print("Warning: normalized_partial_r2 not found or None. Validation might differ.")
+                partial_score = raw_partial_score # Fallback, though ideally we want normalized
+            else:
+                partial_score = normalized_partial_score
+            
             llm_score = score_result.attrs.get('original_normalized_alignment_score')
             # If attributes are not preserved or different, we might need to look at raw attributes
             if llm_score is None:
@@ -140,9 +148,10 @@ def main():
             
             depth_scores.append({
                 "partial": partial_score,
+                "partial_raw": raw_partial_score,
                 "llm": llm_score
             })
-            print(f"    Partial Score: {partial_score:.4f}, LLM Score: {llm_score:.4f}")
+            print(f"    Normalized Partial Score: {partial_score:.4f}, Raw Partial Score: {raw_partial_score:.4f}, LLM Score: {llm_score:.4f}")
             
         # Average over seeds
         partials = [d['partial'] for d in depth_scores]
