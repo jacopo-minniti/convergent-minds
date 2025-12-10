@@ -102,18 +102,23 @@ def compute_moving_baseline(surprisals, topics):
     return np.array(relative_surprisals)
 
 
+
 def main():
     logging.basicConfig(level=logging.INFO)
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="gpt2")
     parser.add_argument("--untrained", action="store_true")
+    # localize args removed as not needed for pure surprisal, but kept for script compat if needed?
+    # User script passed --localize. I'll keep the parser args to avoid breaking the calling script but ignore them.
     parser.add_argument("--localize", action="store_true")
     parser.add_argument("--num-units", type=int, default=256)
+    
     parser.add_argument("--benchmark", default="Pereira2018.243sentences-partialr2")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--save_path", default=None)
     parser.add_argument("--batch-size", type=int, default=64)
+    # topic_wise_cv might not be needed for simple correlation, but keeping arg valid
     parser.add_argument("--topic_wise_cv", action="store_true", default=True)
     parser.add_argument("--no_topic_wise_cv", dest="topic_wise_cv", action="store_false")
     args = parser.parse_args()
@@ -127,7 +132,7 @@ def main():
         args.save_path = "data/scores/surprisal_alignment_debug"
     os.makedirs(args.save_path, exist_ok=True)
 
-    # 1. Load Model
+    # 1. Load Model (Only for Surprisal calculation)
     # Load Model and Tokenizer
     model_path = args.model
     # Resolve possible paths: absolute, relative, or under 'models/' directory
@@ -154,7 +159,7 @@ def main():
         model = AutoModelForCausalLM.from_config(config)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_path)
-        config = model.config
+        # config = model.config # variable not used but safe to have
         
     model.to(device)
     model.eval()
@@ -162,78 +167,31 @@ def main():
     # 2. Load Benchmark & Data
     print(f"Loading benchmark: {args.benchmark}")
     benchmark = load_benchmark(args.benchmark)
-    # Ensure usage of topic_wise_cv
-    benchmark.topic_wise_cv = args.topic_wise_cv
-
-    # We need the stimulus set to get sentences and topics
-    # Benchmark.data['stimulus'] usually holds this
+    
     if not hasattr(benchmark, 'data'):
         raise ValueError("Benchmark must have 'data' attribute loaded.")
     
     assembly = benchmark.data
     stimuli = assembly['stimulus'] # Xarray or similar
     
-    # Depending on brainscore version, getting the actual text might differ
-    # Usually stimuli['sentence'] or stimuli['word'] etc.
-    # For Pereira, it's 'sentence'.
     sentences = stimuli['sentence'].values
-
     passage_labels = assembly['passage_label'].values
     
-    # IMPORTANT: Ensure sentences are sorted by presentation order if we do moving baseline
-    # But calculate_raw_surprisal should map per sentence.
-    # We should iterate in the order they appear in assembly's stimulus dimension?
-    # Pereira assembly usually has neuroid x presentation.
-    # 'presentation' maps to 'stimulus_id'.
-    # We need unique sentences.
-    
     print("Extracting unique sentences and computing surprisal...")
-    # Get unique stimuli in presentation order (if defined) or just unique set
-    # The benchmark methods usually sort by passage.
     
     unique_passages = sorted(set(passage_labels))
-    
-    # We need to construct a mapping: stimulus_id -> info
-    # Because actual scoring aligns by stimulus_id
-    stimulus_id_to_info = {}
-    
-    # We need to process sentences in "presentation order" for moving baseline.
-    # Pereira experiments were presented in blocks. 
-    # If we iterate by passage (sorted) and then by sentence within passage, is that the order?
-    # The prompt says: "You need the presentation order of sentences."
-    # Does the dataset have 'presentation_order'?
-    # It might NOT be strictly defined in the static assembly if it aggregates multiple subjects.
-    # However, for the purpose of this "causal experiment", we can assume the order in the dataset 
-    # (or sorted by passage/sentence ID) is the canonical order or "simulated" order.
-    # Let's iterate passages sorted (as in benchmark.py) and sentences within them.
-    
     ordered_surprisals = []
     ordered_topics = []
     ordered_ids = []
     
-    # To avoid re-computing for duplicates if any
-    
     for passage in unique_passages:
-        # Get stimuli for this passage
-        # In benchmark.py: passage_indexer = [s == passage for s in passage_labels]
-        # But we need them ordered. 
-        # Assuming the benchmark logic:
+        # Get unique stimuli IDs for this passage
         passage_indices = [i for i, p in enumerate(passage_labels) if p == passage]
-        # This gets ALL presentations. Pereira has repeated presentations?
-        # Usually stimulus set is unique sentences.
-        # Let's check stimuli dataframe directly.
-        
-        # Actually benchmark.data['stimulus'] is likely the stimulus set details repeated for presentation?
-        # No, self.data has dim 'presentation'. 
-        
-        # Let's just get the unique stimulus IDs for this passage
         passage_stim_ids = assembly['stimulus_id'].values[passage_indices]
-        # Unique them
-        unique_p_stim_ids = sorted(list(set(passage_stim_ids))) # Sort to be deterministic
+        unique_p_stim_ids = sorted(list(set(passage_stim_ids))) 
         
         for sid in unique_p_stim_ids:
-            # Find the sentence string
-            # Find index in assembly
+            # Find index in assembly (Just grabbing the first occurrence)
             idx = np.where(assembly['stimulus_id'].values == sid)[0][0]
             sentence = sentences[idx]
             topic = passage_labels[idx]
@@ -242,14 +200,14 @@ def main():
             ordered_topics.append(topic)
             
             # Compute/Get Surprisal
-            # We compute it right here (or cache it)
-            # Batching would be faster but let's do one by one for clarity and safety
             inputs = tokenizer(sentence, return_tensors='pt').to(device)
             with torch.no_grad():
                 outputs = model(**inputs, labels=inputs['input_ids'])
                 s_val = outputs.loss.item() 
             ordered_surprisals.append(s_val)
-
+    
+    # Clean up model to free memory? Not strictly necessary if 8G mem.
+    
     ordered_surprisals = np.array(ordered_surprisals)
     ordered_topics = np.array(ordered_topics)
     
@@ -271,167 +229,81 @@ def main():
             'static': static_relative[i],
             'moving': moving_relative[i]
         }
+
+    # 4. Correlation Analysis
+    # We want to correlate Surprisal Vector vs Brain Data (Neuroids)
     
-    # 3. Run Scoring Loop for Ablations
-    # We need to replicate the scoring call but with modified X_llm
+    # Prepare Brain Data Matrix (Y) aligned to ordered_ids?
+    # No, assembly has its own order. We should map Surprisal to Assembly.
+    # assembly (Y) shape: (Presentations, Neuroids)
     
-    # First, get standard embeddings (activations)
-    # We can use the Subject to get them, or reuse if possible.
-    # The benchmark calls candidate.digest_text(). 
-    # We should instantiate the subject properly.
+    # Create aligned surprisal vectors
+    assembly_stim_ids = assembly['stimulus_id'].values
+    n_samples = len(assembly_stim_ids)
     
-    hidden_dim = getattr(config, "n_embd", getattr(config, "hidden_size", 768))
-    localizer_kwargs = {
-        'top_k': args.num_units,
-        'batch_size': args.batch_size,
-        'hidden_dim': hidden_dim
+    aligned_surprisal = {
+        'raw': np.zeros(n_samples),
+        'static': np.zeros(n_samples),
+        'moving': np.zeros(n_samples)
     }
     
-    layer_names = get_layer_names(args.model)
-    subject = HuggingfaceSubject(
-        model_id=args.model + ("-untrained" if args.untrained else ""),
-        model=model,
-        tokenizer=tokenizer,
-        region_layer_mapping={ArtificialSubject.RecordingTarget.language_system: layer_names},
-        use_localizer=args.localize,
-        localizer_kwargs=localizer_kwargs
-    )
-    subject.start_neural_recording(recording_target=ArtificialSubject.RecordingTarget.language_system,
-                                   recording_type=ArtificialSubject.RecordingType.fMRI)
-    
-    # We need to run the subject on the benchmark to get 'neural' (activations)
-    # But we want to inject surprisal into the features before the final regression.
-    # Benchmark.__call__ does everything opaque.
-    # We need to breakdown Benchmark.__call__ logic or rely on a modified flow.
-    # Since we can't modify benchmark.py, we have to copy the logic here using the `linear_partial_r2` metric directly.
-    
-    from alignment.metrics.linear_partial_r2 import linear_partial_r2
-    
-    # Generate Activations (X_llm_base)
-    print("Generating Model Activations...")
-    # We can use the subject.digest_text for each passage like benchmark does
-    
-    predictions_list = []
-    
-    # Re-iterate passages (sorted) to match benchmark consistency
-    for passage in unique_passages:
-        passage_indices = [p == passage for p in passage_labels]
-        # We need the stimuli xarray for this passage
-        # Currently 'stimuli' is the whole column. We need the subset.
-        # The benchmark aligns by 'presentation' dim in assembly.
-        # But 'digest_text' expects a list of strings or xarray with specific structure?
-        # digest_text input: Union[List[str], xr.DataArray]
-        
-        # Let's get the standard stimulus set subset
-        # In benchmark: passage_stimuli = stimuli[passage_indexer]
-        # passage_indexer matches 'presentation' dimension of assembly
-        # stimuli is assembly['stimulus']
-        
-        passage_indexer = [p == passage for p in passage_labels]
-        # passage_stimuli = stimuli[passage_indexer] # slicing xarray
-        # Use boolean indexing on valid dimensions is tricky in some xarray versions if dims don't match
-        # But here 'stimuli' is coordinate of assembly?
-        # assembly.sel(presentation=...)
-        pass_data = assembly.isel(presentation=passage_indexer)
-        pass_stimuli = pass_data['stimulus']
-        
-        output = subject.digest_text(pass_stimuli.values)
-        passage_predictions = output['neural']
-        passage_predictions['stimulus_id'] = 'presentation', pass_stimuli['stimulus_id'].values
-        predictions_list.append(passage_predictions)
-
-    predictions = xr.concat(predictions_list, dim='presentation')
-    
-    # Prepare X_obj
-    # Load objective features same as benchmark
-    filename = f"pereira2018_{benchmark.experiment.replace('sentences', '')}_obj.npz"
-    filepath = os.path.join("data", filename)
-    data_obj = np.load(filepath, allow_pickle=True)
-    X_obj = data_obj['X_obj']
-    obj_stimulus_ids = data_obj['stimulus_ids']
-    
-    pred_stimulus_ids = predictions['stimulus_id'].values
-    obj_id_to_idx = {sid: i for i, sid in enumerate(obj_stimulus_ids)}
-    indices = [obj_id_to_idx[sid] for sid in pred_stimulus_ids]
-    X_obj_aligned = X_obj[indices]
-    
-    # Prepare Base X_llm
-    X_llm_base = predictions.values
-    
-    # Prepare Y
-    data_id_to_idx = {sid: i for i, sid in enumerate(assembly['stimulus_id'].values)}
-    y_indices = [data_id_to_idx[sid] for sid in pred_stimulus_ids]
-    y_aligned = assembly.values[y_indices]
-    passage_labels_aligned = assembly['passage_label'].values[y_indices]
-    
-    # Define Splits (Topic-Wise)
-    if args.topic_wise_cv:
-        gkf = GroupKFold(n_splits=10)
-        splits = list(gkf.split(X_llm_base, y_aligned, groups=passage_labels_aligned))
-    else:
-        kf = KFold(n_splits=10, shuffle=True, random_state=42)
-        splits = list(kf.split(X_llm_base, y_aligned))
-
-    # 4. Ablation Loop
-    ablations = [
-        ("No Surprisal", None),
-        ("Raw Surprisal", "raw"),
-        ("Static Relative", "static"),
-        ("Moving Relative", "moving")
-    ]
-    
-    ablation_results = {}
-    
-    print("\n=== Running Ablations ===")
-    
-    for name, mode in ablations:
-        print(f"Scoring: {name}")
-        
-        if mode is None:
-            X_llm_curr = X_llm_base
-        else:
-            # Construct surprisal column
-            # Must match pred_stimulus_ids order
-            surp_col = []
-            for sid in pred_stimulus_ids:
-                surp_col.append(surprisal_map[sid][mode])
-            surp_col = np.array(surp_col)[:, np.newaxis] # (N, 1)
+    for i, sid in enumerate(assembly_stim_ids):
+        for key in aligned_surprisal:
+            aligned_surprisal[key][i] = surprisal_map[sid][key]
             
-            X_llm_curr = np.hstack([X_llm_base, surp_col])
+    # Y data
+    Y = assembly.values # (N, V)
+    
+    # Helper for vectorized correlation
+    def compute_correlation(x, Y):
+        """
+        x: (N,)
+        Y: (N, V)
+        Returns: (V,) correlation coefficients
+        """
+        # Center x
+        x_c = x - np.mean(x)
+        x_norm = np.linalg.norm(x_c)
+        if x_norm == 0:
+            return np.zeros(Y.shape[1])
             
-        # Run Metric
-        score_val, diagnostics = linear_partial_r2(
-            X_obj=X_obj_aligned,
-            X_llm=X_llm_curr,
-            y=y_aligned,
-            splits=splits
-        )
+        # Center Y
+        Y_c = Y - np.mean(Y, axis=0) # (N, V)
+        Y_norm = np.linalg.norm(Y_c, axis=0) # (V,)
         
-        # Collect relevant stats
-        # We focus on the Partial R2
-        # Normalize it if ceiling is available
+        # Avoid division by zero
+        Y_norm[Y_norm == 0] = 1e-9
         
-        # Ceiling
-        # We need the ceiling from the benchmark object
-        # benchmark.ceiling
+        # Correlation
+        # cov = dot(x_c, Y_c)
+        dot_prod = np.dot(x_c, Y_c) # (V,)
+        corr = dot_prod / (x_norm * Y_norm)
+        return corr
+
+    # Results container
+    results = {}
+    
+    print("\n=== Calculating Correlations ===")
+    
+    # Iterate configs
+    configs = ['raw', 'static', 'moving']
+    
+    for config in configs:
+        x = aligned_surprisal[config]
+        corrs = compute_correlation(x, Y)
         
-        normalized_partial_r2 = None
-        if benchmark.ceiling is not None:
-            ceiling_values = benchmark.ceiling.values
-            median_ceiling_r2 = np.median(ceiling_values ** 2)
-            if median_ceiling_r2 > 0:
-                normalized_partial_r2 = float(score_val / median_ceiling_r2)
-            else:
-                normalized_partial_r2 = 0.0
-                
-        ablation_results[name] = {
-            "partial_r2": float(score_val),
-            "normalized_partial_r2": normalized_partial_r2,
-            "llm_explained_variance": diagnostics.get('llm_explained_variance'), # Raw LLM exp var
-            "joint_explained_variance": diagnostics.get('obj_llm_explained_variance')
+        mean_corr = float(np.mean(corrs))
+        median_corr = float(np.median(corrs))
+        std_corr = float(np.std(corrs))
+        
+        print(f"{config.capitalize()}: Mean r = {mean_corr:.4f}, Median r = {median_corr:.4f}")
+        
+        results[config] = {
+            "mean_correlation": mean_corr,
+            "median_correlation": median_corr,
+            "std_correlation": std_corr,
+            "all_correlations": corrs.tolist() 
         }
-        
-        print(f"  Result: Norm Partial R2 = {normalized_partial_r2:.4f}")
 
     # 5. Save Info
     info = {
@@ -439,7 +311,7 @@ def main():
         "benchmark": args.benchmark,
         "timestamp": datetime.datetime.now().isoformat(),
         "args": vars(args),
-        "results": ablation_results
+        "results": results
     }
     
     save_file = os.path.join(args.save_path, "info.json")
