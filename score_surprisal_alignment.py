@@ -7,6 +7,7 @@ import argparse
 import logging
 import numpy as np
 import pandas as pd
+import xarray as xr
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
