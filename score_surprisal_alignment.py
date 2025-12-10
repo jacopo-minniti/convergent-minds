@@ -1,6 +1,8 @@
-
 import os
 import sys
+# Force local import of brainscore by adding the current directory to sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import argparse
 import logging
 import numpy as np
@@ -10,15 +12,11 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from brainscore import load_benchmark, ArtificialSubject
 from brainscore.model_helpers.huggingface import HuggingfaceSubject, get_layer_names
-from brainscore.metrics import Score
 from brainscore.utils.ceiling import ceiling_normalize
 from tqdm import tqdm
 import json
 import datetime
 from sklearn.model_selection import GroupKFold, KFold
-
-# Force local import of brainscore by adding the current directory to sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def compute_raw_surprisal(model, tokenizer, sentences, device='cuda'):
