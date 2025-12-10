@@ -131,14 +131,13 @@ def linear_partial_r2(
         
         y_train_mean = np.mean(y_train, axis=0)
         
-        # Baseline R²
+        # Baseline R² (Test)
         sse_baseline = np.sum((y_test - y_pred_baseline_test)**2, axis=0)
         sst_baseline = np.sum((y_test - y_train_mean)**2, axis=0)
-        # Avoid division by zero
         sst_baseline[sst_baseline == 0] = 1e-10
         r2_baseline = 1 - sse_baseline / sst_baseline
         
-        # Combined R²
+        # Combined R² (Test)
         sse_combined = np.sum((y_test - y_pred_combined)**2, axis=0)
         sst_combined = np.sum((y_test - y_train_mean)**2, axis=0) # Same SST
         sst_combined[sst_combined == 0] = 1e-10
@@ -147,17 +146,51 @@ def linear_partial_r2(
         # ΔR²
         delta_r2 = r2_combined - r2_baseline
         
+        # [DEBUG] Training R²
+        # Baseline Train
+        y_pred_baseline_train = model_baseline.predict(X_obj_train_scaled)
+        sse_baseline_train = np.sum((y_train - y_pred_baseline_train)**2, axis=0)
+        sst_train = np.sum((y_train - y_train_mean)**2, axis=0)
+        sst_train[sst_train == 0] = 1e-10
+        r2_baseline_train = 1 - sse_baseline_train / sst_train
+        
+        # Combined Train
+        y_pred_combined_train = model_combined.predict(X_combined_train_scaled)
+        sse_combined_train = np.sum((y_train - y_pred_combined_train)**2, axis=0)
+        r2_combined_train = 1 - sse_combined_train / sst_train
+        
+        # [DEBUG] Feature Correlation (Objective vs LLM)
+        # We can check the correlation between the predictions of the two models on the test set
+        # to see if they are redundant.
+        # y_pred_baseline_test vs y_pred_llm_only
+        
+        # We need y_pred_llm_only from above (it is calculated).
+        # Centered already available as y_pred_c (LLM) and y_pred_baseline_c (Objective)
+        # Note: y_pred_c was centered using its own mean, y_pred_baseline_c using its own mean.
+        
+        # Norms
+        # y_pred_norm (LLM) already calc
+        # y_pred_baseline_norm (Obj) already calc
+        
+        feature_corr = np.sum(y_pred_baseline_c * y_pred_c, axis=0) / (y_pred_baseline_norm * y_pred_norm)
+        
         r2_baseline_splits.append(r2_baseline)
         r2_combined_splits.append(r2_combined)
         delta_r2_splits.append(delta_r2)
         
         if split_idx == 0:
-            logger.info(f"Split 0: Median R2 Baseline = {np.median(r2_baseline):.4f}")
-            logger.info(f"Split 0: Median R2 Combined = {np.median(r2_combined):.4f}")
-            logger.info(f"Split 0: Median Delta R2 = {np.median(delta_r2):.4f}")
-            logger.info(f"Split 0: Max R2 Combined = {np.max(r2_combined):.4f}")
+            logger.info(f"Split 0: Median R2 Baseline (Test) = {np.median(r2_baseline):.4f}")
+            logger.info(f"Split 0: Median R2 Combined (Test) = {np.median(r2_combined):.4f}")
+            logger.info(f"Split 0: Median Delta R2 (Test) = {np.median(delta_r2):.4f}")
+            
+            logger.info(f"Split 0: Median R2 Baseline (Train) = {np.median(r2_baseline_train):.4f}")
+            logger.info(f"Split 0: Median R2 Combined (Train) = {np.median(r2_combined_train):.4f}")
+            logger.info(f"Split 0: Median Delta R2 (Train) = {np.median(r2_combined_train - r2_baseline_train):.4f}")
+            
+            logger.info(f"Split 0: Max R2 Combined (Test) = {np.max(r2_combined):.4f}")
             logger.info(f"Split 0: Median LLM-Only Pearson r = {np.median(pearson_r):.4f}")
             logger.info(f"Split 0: Median Objective Pearson r = {np.median(pearson_r_obj):.4f}")
+            logger.info(f"Split 0: Median Feature Prediction Correlation = {np.median(feature_corr):.4f}")
 
     # 4.4 Aggregation
     # Median across neuroids per split
