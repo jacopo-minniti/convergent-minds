@@ -15,6 +15,9 @@ from brainscore.model_helpers.huggingface import get_layer_names
 from models.hierarchical_gpt import HierarchicalGPT2
 
 def main():
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
     parser = argparse.ArgumentParser(description="Hierarchical Alignment Analysis")
     parser.add_argument("--model", default="gpt2", help="Base model identifier")
     parser.add_argument("--untrained", action="store_true", help="Use an untrained version of the model")
