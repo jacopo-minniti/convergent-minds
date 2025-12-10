@@ -211,6 +211,11 @@ def linear_partial_r2(
             logger.info(f"Split 0: Median Objective Pearson r = {np.median(pearson_r_obj):.4f}")
             logger.info(f"Split 0: Median Feature Prediction Correlation = {np.median(feature_corr):.4f}")
             logger.info(f"Split 0: Median SST (Test, using Test Mean) = {np.median(sst_test):.4f}")
+            
+            # [DEBUG] Scale/Bias Check
+            logger.info(f"Split 0: y_test Mean={np.mean(y_test):.4f}, Std={np.std(y_test):.4f}")
+            logger.info(f"Split 0: Pred LLM Mean={np.mean(y_pred_llm_only):.4f}, Std={np.std(y_pred_llm_only):.4f}")
+            logger.info(f"Split 0: Pred Obj Mean={np.mean(y_pred_baseline_test):.4f}, Std={np.std(y_pred_baseline_test):.4f}")
 
     # 4.4 Aggregation
     # Median across neuroids per split
