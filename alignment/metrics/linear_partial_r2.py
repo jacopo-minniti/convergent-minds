@@ -221,6 +221,10 @@ def linear_partial_r2(
     # Median across neuroids per split
     score_per_split = [np.median(d) for d in delta_r2_splits]
     
+    # Same Weight Aggregation
+    score_same_weight_per_split = [np.median(d) for d in delta_r2_same_weight_splits]
+    alignment_score_same_weight = np.mean(score_same_weight_per_split)
+
     # Mean across splits
     alignment_score = np.mean(score_per_split)
     
@@ -258,9 +262,12 @@ def linear_partial_r2(
         "r2_baseline_per_split_neuroid": r2_baseline_splits,
         "r2_combined_per_split_neuroid": r2_combined_splits,
         "delta_r2_per_split_neuroid": delta_r2_splits,
+        "delta_r2_same_weight_per_split_neuroid": delta_r2_same_weight_splits,
         "pearson_r_splits": pearson_r_splits, # List of arrays
         "pearson_r_objective_splits": pearson_r_objective_splits,
         "score_per_split": score_per_split,
+        "score_same_weight_per_split": score_same_weight_per_split,
+        "alignment_score_same_weight": alignment_score_same_weight,
         "objective_explained_variance": objective_explained_variance,
         "obj_llm_explained_variance": obj_llm_explained_variance,
         "llm_explained_variance": llm_explained_variance,

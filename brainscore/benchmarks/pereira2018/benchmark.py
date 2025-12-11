@@ -322,10 +322,12 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
         # Calculate Normalized Correlation
         original_alignment_score = diagnostics.get('original_alignment_score', None)
         objective_alignment_score = diagnostics.get('objective_alignment_score', None)
+        alignment_score_same_weight = diagnostics.get('alignment_score_same_weight', None)
         
         original_normalized_alignment_score = None
         objective_normalized_alignment_score = None
         normalized_partial_r2 = None
+        normalized_partial_r2_same_weight = None
         
         if self.ceiling is not None:
             # Normalize LLM Correlation
@@ -361,6 +363,9 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
                 if median_ceiling_r2 > 0:
                     normalized_partial_r2 = score / median_ceiling_r2
                     
+                    if alignment_score_same_weight is not None:
+                        normalized_partial_r2_same_weight = alignment_score_same_weight / median_ceiling_r2
+                    
                     objective_explained_variance = diagnostics.get('objective_explained_variance')
                     if objective_explained_variance is not None:
                          objective_normalized_explained_variance = objective_explained_variance / median_ceiling_r2
@@ -375,11 +380,13 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
                          
                 else:
                     normalized_partial_r2 = 0.0
+                    normalized_partial_r2_same_weight = 0.0
                     objective_normalized_explained_variance = 0.0
                     obj_llm_normalized_explained_variance = 0.0
             except Exception as e:
                 print(f"Warning: Failed to normalize Variances: {e}")
                 normalized_partial_r2 = None
+                normalized_partial_r2_same_weight = None
                 objective_normalized_explained_variance = None
                 obj_llm_normalized_explained_variance = None
         else:
@@ -405,6 +412,12 @@ class _Pereira2018ExperimentPartialR2(BenchmarkBase):
             
         if normalized_partial_r2 is not None:
             final_score.attrs['normalized_partial_r2'] = normalized_partial_r2
+            
+        if alignment_score_same_weight is not None:
+            final_score.attrs['partial_r2_same_weight'] = alignment_score_same_weight
+            
+        if normalized_partial_r2_same_weight is not None:
+            final_score.attrs['normalized_partial_r2_same_weight'] = normalized_partial_r2_same_weight
             
         if objective_normalized_explained_variance is not None:
             final_score.attrs['objective_normalized_explained_variance'] = objective_normalized_explained_variance

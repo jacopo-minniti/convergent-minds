@@ -130,12 +130,21 @@ def main():
             # Extract scores
             raw_partial_score = float(score_result.values) if score_result.values.size == 1 else np.mean(score_result.values)
             normalized_partial_score = score_result.attrs.get('normalized_partial_r2')
+            
+            # Same Weight Scores
+            raw_partial_score_same_weight = score_result.attrs.get('partial_r2_same_weight')
+            normalized_partial_score_same_weight = score_result.attrs.get('normalized_partial_r2_same_weight')
 
             if normalized_partial_score is None:
                 print("Warning: normalized_partial_r2 not found or None. Validation might differ.")
-                partial_score = raw_partial_score # Fallback, though ideally we want normalized
+                partialr2_best_weight = raw_partial_score # Fallback, though ideally we want normalized
             else:
-                partial_score = normalized_partial_score
+                partialr2_best_weight = normalized_partial_score
+            
+            if normalized_partial_score_same_weight is None:
+                partial_r2_same_weight = raw_partial_score_same_weight if raw_partial_score_same_weight is not None else 0.0
+            else:
+                partial_r2_same_weight = normalized_partial_score_same_weight
             
             llm_score = score_result.attrs.get('original_normalized_alignment_score')
             # If attributes are not preserved or different, we might need to look at raw attributes
@@ -145,31 +154,39 @@ def main():
                 print("Warning: original_normalized_alignment_score not found in result attributes.")
             
             depth_scores.append({
-                "partial": partial_score,
+                "partialr2_best_weight": partialr2_best_weight,
+                "partial_r2_same_weight": partial_r2_same_weight,
                 "partial_raw": raw_partial_score,
                 "llm": llm_score
             })
-            print(f"    Normalized Partial Score: {partial_score:.4f}, Raw Partial Score: {raw_partial_score:.4f}, LLM Score: {llm_score:.4f}")
+            print(f"    Norm Partial (Best): {partialr2_best_weight:.4f}, Norm Partial (Same): {partial_r2_same_weight:.4f}, LLM: {llm_score:.4f}")
             
         # Average over seeds
-        partials = [d['partial'] for d in depth_scores]
+        partials_best = [d['partialr2_best_weight'] for d in depth_scores]
+        partials_same = [d['partial_r2_same_weight'] for d in depth_scores]
         llms = [d['llm'] for d in depth_scores]
         
-        avg_partial = np.mean(partials)
-        std_partial = np.std(partials)
+        avg_partial_best = np.mean(partials_best)
+        std_partial_best = np.std(partials_best)
+        
+        avg_partial_same = np.mean(partials_same)
+        std_partial_same = np.std(partials_same)
         
         avg_llm = np.mean(llms)
         std_llm = np.std(llms)
         
         results_by_depth.append({
             "depth": depth,
-            "partial_mean": avg_partial,
-            "partial_std": std_partial,
+            "partialr2_best_weight_mean": avg_partial_best,
+            "partialr2_best_weight_std": std_partial_best,
+            "partial_r2_same_weight_mean": avg_partial_same,
+            "partial_r2_same_weight_std": std_partial_same,
             "llm_mean": avg_llm,
             "llm_std": std_llm,
             "raw_scores": depth_scores
         })
-        print(f"  Depth {depth} Avg Partial: {avg_partial:.4f} +/- {std_partial:.4f}")
+        print(f"  Depth {depth} Avg Partial (Best): {avg_partial_best:.4f} +/- {std_partial_best:.4f}")
+        print(f"  Depth {depth} Avg Partial (Same): {avg_partial_same:.4f} +/- {std_partial_same:.4f}")
         print(f"  Depth {depth} Avg LLM: {avg_llm:.4f} +/- {std_llm:.4f}")
 
     # Save results
@@ -180,10 +197,11 @@ def main():
 
     # Plot 1: Normalized Partial R2
     plt.figure(figsize=(10, 6))
-    plt.errorbar(results_df["depth"], results_df["partial_mean"], yerr=results_df["partial_std"], fmt='-o', capsize=5, label='Partial R²')
+    plt.errorbar(results_df["depth"], results_df["partialr2_best_weight_mean"], yerr=results_df["partialr2_best_weight_std"], fmt='-o', capsize=5, label='Partial R² (Best Weight)')
+    plt.errorbar(results_df["depth"], results_df["partial_r2_same_weight_mean"], yerr=results_df["partial_r2_same_weight_std"], fmt='-^', capsize=5, label='Partial R² (Same Weight)')
     plt.xlabel("Depth (Number of Transformer Blocks)")
     plt.ylabel("Normalized Partial R²")
-    plt.title(f"Hierarchical Alignment: {args.model} ({'Untrained' if args.untrained else 'Trained'})\nNormalized Partial R²")
+    plt.title(f"Layer-wise Alignment ({args.model} {'Untrained' if args.untrained else 'Trained'}, Pereira2018)")
     plt.grid(True)
     plt.xticks(args.depths)
     plt.legend()
@@ -198,7 +216,7 @@ def main():
     plt.errorbar(results_df["depth"], results_df["llm_mean"], yerr=results_df["llm_std"], fmt='-s', capsize=5, color='orange', label='LLM-Only R²')
     plt.xlabel("Depth (Number of Transformer Blocks)")
     plt.ylabel("Normalized LLM-Only R²")
-    plt.title(f"Hierarchical Alignment: {args.model} ({'Untrained' if args.untrained else 'Trained'})\nNormalized LLM-Only R² (No Objective Features)")
+    plt.title(f"Layer-wise Alignment ({args.model} {'Untrained' if args.untrained else 'Trained'}, Pereira2018)\nNormalized LLM-Only R² (No Objective Features)")
     plt.grid(True)
     plt.xticks(args.depths)
     plt.legend()
