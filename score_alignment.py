@@ -314,22 +314,97 @@ def main():
     # 4. Save info.json
     save_path_json = os.path.join(args.output_dir, "info.json")
     import json
+    
+    # Helper to serialize numpy types
+    def default(o):
+        import numpy as np
+        if isinstance(o, (np.int_, np.intc, np.intp, np.int8,
+                          np.int16, np.int32, np.int64, np.uint8,
+                          np.uint16, np.uint32, np.uint64)):
+            return int(o)
+        elif isinstance(o, (np.float_, np.float16, np.float32, np.float64)):
+            return float(o)
+        elif isinstance(o, (np.ndarray,)):
+            return o.tolist()
+        return str(o)
+    
     with open(save_path_json, 'w') as f:
-        # Handle potential non-serializable types in info (like numpy types)
-        def default(o):
-            import numpy as np
-            if isinstance(o, (np.int_, np.intc, np.intp, np.int8,
-                              np.int16, np.int32, np.int64, np.uint8,
-                              np.uint16, np.uint32, np.uint64)):
-                return int(o)
-            elif isinstance(o, (np.float_, np.float16, np.float32, np.float64)):
-                return float(o)
-            elif isinstance(o, (np.ndarray,)):
-                return o.tolist()
-            return str(o)
-            
         json.dump(info, f, indent=4, default=default)
     print(f"Run info saved to: {save_path_json}")
+
+    # 4b. Save Detailed Scores (Raw Folds)
+    # We want to save the raw scores for every fold/sample to allow for more powerful statistical tests.
+    
+    # Helper to extract raw values (list of floats) from a result object or its diagnostics
+    def extract_raw_values(res, attr_name=None, diag_key=None):
+        import numpy as np
+        values = []
+        
+        # Case 1: Main score values (partial R2)
+        if attr_name is None and diag_key is None:
+            v = res.values
+            if v.ndim == 0:
+                values = [float(v)]
+            else:
+                values = v.flatten().tolist()
+        
+        # Case 2: Attribute (e.g., correlation)
+        # BrainScore attributes are often just scalars, but if we had raw ones we'd grab them here.
+        # Currently, objective_alignment_score is usually a scalar.
+        elif attr_name:
+            val = res.attrs.get(attr_name)
+            if val is not None:
+                # If it's a scalar, wrap it. If it's a list/array, use it.
+                if isinstance(val, (int, float, np.number)):
+                    values = [float(val)]
+                elif isinstance(val, (list, tuple, np.ndarray)):
+                    values = np.array(val).flatten().tolist()
+        
+        # Case 3: Diagnostics (variance metrics)
+        elif diag_key:
+            diag = res.attrs.get('diagnostics', {})
+            if isinstance(diag, str):
+                try:
+                    import ast
+                    diag = ast.literal_eval(diag)
+                except:
+                    diag = {}
+            
+            val = diag.get(diag_key)
+            if val is not None:
+                if isinstance(val, (int, float, np.number)):
+                    values = [float(val)]
+                elif isinstance(val, (list, tuple, np.ndarray)):
+                    values = np.array(val).flatten().tolist()
+
+        return values
+
+    detailed_scores = {
+        "model": args.model,
+        "benchmark": args.benchmark,
+        "seeds": seeds,
+        "raw_scores": {
+            # Structure: key -> list of lists (one list per seed)
+            "partial": [extract_raw_values(r) for r in all_results],
+            
+            # For correlations, we typically only get one value per seed (the Pearson R on the aggregate).
+            # If the benchmark provided per-fold correlations, we would extract them here.
+            # For now, we save what we have (likely 1 per seed), but consistent format.
+            "objective_corr": [extract_raw_values(r, attr_name='objective_alignment_score') for r in all_results],
+            "llm_corr": [extract_raw_values(r, attr_name='original_alignment_score') for r in all_results],
+            
+            # Explained variances often come from raw diagnostics which might contain per-fold data
+            # if the metric implementation supports it. If not, it's 1 per seed.
+            "objective_var": [extract_raw_values(r, diag_key='objective_explained_variance') for r in all_results],
+            "llm_only_var": [extract_raw_values(r, diag_key='llm_explained_variance') for r in all_results],
+            "joint_var": [extract_raw_values(r, diag_key='obj_llm_explained_variance') for r in all_results],
+        }
+    }
+    
+    save_path_detailed = os.path.join(args.output_dir, "detailed_scores.json")
+    with open(save_path_detailed, 'w') as f:
+        json.dump(detailed_scores, f, indent=4, default=default)
+    print(f"Detailed raw scores saved to: {save_path_detailed}")
 
     # 4. Save Benchmark Examples (Stimuli)
     print("Attempting to save benchmark examples...")
