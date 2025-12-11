@@ -339,7 +339,7 @@ def main():
         corrs = corrs[~np.isnan(corrs)]
         
         if len(corrs) == 0:
-            mean_c, median_c, max_c, p90 = 0,0,0,0
+            mean_c = median_c = std_c = max_c = p90 = p10 = 0.0
         else:
             mean_c = float(np.mean(corrs))
             median_c = float(np.median(corrs))
