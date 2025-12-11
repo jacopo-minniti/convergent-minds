@@ -117,71 +117,60 @@ def main():
             # Score
             score_result = score(subject, benchmark)
             
-            # Extract scores
-            raw_partial_score = float(score_result.values) if score_result.values.size == 1 else np.mean(score_result.values)
-            normalized_partial_score = score_result.attrs.get('normalized_partial_r2')
-            
-            # Training Scores
+            # Training Scores from diagnostics
             diagnostics = score_result.attrs.get('diagnostics')
+            delta_r2_train = 0.0
             if diagnostics:
                  delta_r2_train_splits = diagnostics.get('delta_r2_train_per_split_neuroid')
                  if delta_r2_train_splits:
                      # Median per split
                      score_per_split_train = [np.median(d) for d in delta_r2_train_splits]
                      delta_r2_train = np.mean(score_per_split_train)
-                 else:
-                     delta_r2_train = 0.0
-            else:
-                 delta_r2_train = 0.0
 
-            if normalized_partial_score is None:
-                print("Warning: normalized_partial_r2 not found or None. Validation might differ.")
-                partialr2_best_weight = raw_partial_score # Fallback, though ideally we want normalized
-            else:
-                partialr2_best_weight = normalized_partial_score
-            
-            llm_score = score_result.attrs.get('original_normalized_alignment_score')
-            # If attributes are not preserved or different, we might need to look at raw attributes
-            if llm_score is None:
-                # Try fallback or just use 0 if not available (shouldn't happen with correct benchmark)
-                llm_score = 0.0
-                print("Warning: original_normalized_alignment_score not found in result attributes.")
+            # Raw Partial R2
+            # Use raw_partial_score directly as our best_weight since we want un-normalized
+            partial_test_raw = raw_partial_score
+
+            # Raw LLM-Only Score (from original_alignment_score in diagnostics)
+            llm_test_raw = diagnostics.get('original_alignment_score', 0.0)
+            if llm_test_raw is None:
+                llm_test_raw = 0.0
+                print("Warning: original_alignment_score not found in result attributes.")
             
             depth_scores.append({
-                "partialr2_best_weight": partialr2_best_weight,
+                "partial_test": partial_test_raw, 
                 "partial_train": delta_r2_train,
-                "partial_raw": raw_partial_score,
-                "llm": llm_score
+                "llm_test": llm_test_raw
             })
-            print(f"    Norm Partial: {partialr2_best_weight:.4f}, Train Partial: {delta_r2_train:.4f}, LLM: {llm_score:.4f}")
+            print(f"    Test Partial (Raw): {partial_test_raw:.4f}, Train Partial (Raw): {delta_r2_train:.4f}, Test LLM (Raw): {llm_test_raw:.4f}")
             
         # Average over seeds
-        partials_best = [d['partialr2_best_weight'] for d in depth_scores]
+        partials_test = [d['partial_test'] for d in depth_scores]
         partials_train = [d['partial_train'] for d in depth_scores]
-        llms = [d['llm'] for d in depth_scores]
+        llms_test = [d['llm_test'] for d in depth_scores]
         
-        avg_partial_best = np.mean(partials_best)
-        std_partial_best = np.std(partials_best)
+        avg_partial_test = np.mean(partials_test)
+        std_partial_test = np.std(partials_test)
         
         avg_partial_train = np.mean(partials_train)
         std_partial_train = np.std(partials_train)
         
-        avg_llm = np.mean(llms)
-        std_llm = np.std(llms)
+        avg_llm_test = np.mean(llms_test)
+        std_llm_test = np.std(llms_test)
         
         results_by_depth.append({
             "depth": depth,
-            "partialr2_best_weight_mean": avg_partial_best,
-            "partialr2_best_weight_std": std_partial_best,
+            "partial_test_mean": avg_partial_test,
+            "partial_test_std": std_partial_test,
             "partial_train_mean": avg_partial_train,
             "partial_train_std": std_partial_train,
-            "llm_mean": avg_llm,
-            "llm_std": std_llm,
+            "llm_test_mean": avg_llm_test,
+            "llm_test_std": std_llm_test,
             "raw_scores": depth_scores
         })
-        print(f"  Depth {depth} Avg Partial: {avg_partial_best:.4f} +/- {std_partial_best:.4f}")
-        print(f"  Depth {depth} Avg Partial (Train): {avg_partial_train:.4f} +/- {std_partial_train:.4f}")
-        print(f"  Depth {depth} Avg LLM: {avg_llm:.4f} +/- {std_llm:.4f}")
+        print(f"  Depth {depth} Avg Test Partial: {avg_partial_test:.4f} +/- {std_partial_test:.4f}")
+        print(f"  Depth {depth} Avg Train Partial: {avg_partial_train:.4f} +/- {std_partial_train:.4f}")
+        print(f"  Depth {depth} Avg Test LLM: {avg_llm_test:.4f} +/- {std_llm_test:.4f}")
 
     # Save results
     results_df = pd.DataFrame(results_by_depth)
@@ -192,23 +181,21 @@ def main():
     # Figure 1: Test Scores (2 Panels)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), dpi=800)
     
-    # Panel 1: Partial R2
-    ax1.errorbar(results_df["depth"], results_df["partialr2_best_weight_mean"], yerr=results_df["partialr2_best_weight_std"], fmt='-o', capsize=5, color='blue', label='Partial R²')
+    # Panel 1: Partial R2 Test
+    ax1.errorbar(results_df["depth"], results_df["partial_test_mean"], yerr=results_df["partial_test_std"], fmt='-o', capsize=5, color='blue')
     ax1.set_xlabel("Depth (Number of Transformer Blocks)")
-    ax1.set_ylabel("Normalized Partial R²")
-    ax1.set_title("Normalized Partial R²")
+    ax1.set_ylabel("Raw Partial R²")
+    ax1.set_title("Partial R²")
     ax1.grid(True)
     ax1.set_xticks(args.depths)
-    ax1.legend()
 
-    # Panel 2: LLM Only R2
-    ax2.errorbar(results_df["depth"], results_df["llm_mean"], yerr=results_df["llm_std"], fmt='-s', capsize=5, color='orange', label='LLM-Only R²')
+    # Panel 2: LLM Only R2 Test
+    ax2.errorbar(results_df["depth"], results_df["llm_test_mean"], yerr=results_df["llm_test_std"], fmt='-s', capsize=5, color='orange')
     ax2.set_xlabel("Depth (Number of Transformer Blocks)")
-    ax2.set_ylabel("Normalized LLM-Only R²")
-    ax2.set_title("Normalized LLM-Only R²")
+    ax2.set_ylabel("Raw LLM-Only R²")
+    ax2.set_title("LLM-Only R²")
     ax2.grid(True)
     ax2.set_xticks(args.depths)
-    ax2.legend()
 
     plt.suptitle(base_title)
     plt.tight_layout()
@@ -220,13 +207,12 @@ def main():
     
     # Figure 2: Training Partial R2 (Separate)
     plt.figure(figsize=(10, 6), dpi=800)
-    plt.errorbar(results_df["depth"], results_df["partial_train_mean"], yerr=results_df["partial_train_std"], fmt='-d', capsize=5, color='green', label='Training Partial R²')
+    plt.errorbar(results_df["depth"], results_df["partial_train_mean"], yerr=results_df["partial_train_std"], fmt='-d', capsize=5, color='green')
     plt.xlabel("Depth (Number of Transformer Blocks)")
     plt.ylabel("Raw Partial R²")
-    plt.title(f"{base_title}\nTraining Partial R² (Raw)")
+    plt.title(base_title) # Simplified title
     plt.grid(True)
     plt.xticks(args.depths)
-    plt.legend()
     
     plot_path_train = os.path.join(args.save_path, "depth_vs_partial_r2_train.png")
     plt.savefig(plot_path_train, dpi=800)
@@ -241,9 +227,14 @@ def main():
         "localize": args.localize,
         "num_units": args.num_units,
         "depths": args.depths,
+        "topic_wise_cv": args.topic_wise_cv,
         "timestamp": datetime.datetime.now().isoformat(),
         "command": " ".join(sys.argv),
-        "results": results_by_depth
+        "results_summary": {
+            "partial_test_mean": results_df["partial_test_mean"].tolist(),
+            "llm_test_mean": results_df["llm_test_mean"].tolist(),
+            "partial_train_mean": results_df["partial_train_mean"].tolist()
+        }
     }
     import json
     with open(os.path.join(args.save_path, "info.json"), 'w') as f:
