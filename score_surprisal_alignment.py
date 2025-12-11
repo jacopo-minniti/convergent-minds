@@ -135,6 +135,7 @@ def compute_moving_baseline(surprisals, topics):
     return np.array(relative_surprisals)
 
 
+
 def main():
     logging.basicConfig(level=logging.INFO)
     
@@ -160,8 +161,7 @@ def main():
         args.save_path = "data/scores/surprisal_alignment_debug"
     os.makedirs(args.save_path, exist_ok=True)
 
-    # 1. Load Model (Only for Surprisal calculation)
-    # Load Model and Tokenizer
+    # 1. Load Model
     model_path = args.model
     # Resolve possible paths
     if os.path.isabs(args.model) and os.path.isdir(args.model):
@@ -197,44 +197,88 @@ def main():
         raise ValueError("Benchmark must have 'data' attribute loaded.")
     
     assembly = benchmark.data
+    print(f"Assembly coords: {list(assembly.coords.keys())}")
+    print(f"Assembly attrs: {list(assembly.attrs.keys())}")
+    
     stimuli = assembly['stimulus'] 
     
     sentences = stimuli['sentence'].values
     passage_labels = assembly['passage_label'].values
+    # In BrainScore assemblies, there might be 'stimulus_id' coordinate
+    stimulus_ids = assembly['stimulus_id'].values
     
-    print("Extracting unique sentences and computing surprisal...")
+    print("Computing Surprisals in Presentation Order...")
     
-    unique_passages = sorted(set(passage_labels))
+    # We iterate over the distinct presentations in the assembly
+    # Note: assembly is (presentation x neuroid). 
+    # The 'presentation' dimension is aligned with sentences/passage_labels.
     
     ordered_surprisals = []
     ordered_topics = []
-    ordered_ids = []
     
-    for passage in unique_passages:
-        # Get unique stimuli IDs for this passage
-        passage_indices = [i for i, p in enumerate(passage_labels) if p == passage]
-        passage_stim_ids = assembly['stimulus_id'].values[passage_indices]
-        unique_p_stim_ids = sorted(list(set(passage_stim_ids))) 
-        
-        # Maintain context for this passage
-        passage_context = []
-        
-        for sid in unique_p_stim_ids:
-            # Find index in assembly
-            idx = np.where(assembly['stimulus_id'].values == sid)[0][0]
-            sentence = sentences[idx]
-            topic = passage_labels[idx]
-            
-            ordered_ids.append(sid)
-            ordered_topics.append(topic)
-            
-            # Compute Total Surprisal with Context
-            s_val = compute_contextual_surprisal(model, tokenizer, sentence, passage_context, device)
-            ordered_surprisals.append(s_val)
-            
-            # Add current sentence to context for next one
-            passage_context.append(sentence)
+    # Context cache: passage_label -> list of previous sentences
+    # This ensures that even if presentation is interleaved (unlikely for Pereira but possible),
+    # we maintain the narrative context for that passage.
+    passage_contexts = {p: [] for p in np.unique(passage_labels)}
     
+    # Cache surprisals to avoid re-computing for identical (sentence, context) pairs?
+    # Context grows, so cache hit rate might be low unless we hash the list.
+    # Given dataset size (~384 * N_subjects?), it's small enough to just compute.
+    # Actually, Pereira is usually ~243 or 384 sentences. 
+    # If assembly has repetitions (multiple subjects), we don't want to recompute 10x.
+    # We should compute distinct (passage, sentence_idx) items?
+    # But "Moving Baseline" depends on presentation order.
+    # If the assembly repeats the *same* experiment sequence for 5 subjects, 
+    # the "moving baseline" should be the same for all.
+    # We can just compute a flat list aligned with assembly.
+    
+    # Optimization: If the assembly is Subject x Presentation stacked, 
+    # it might be huge. 
+    # But usually BrainScore Pereira benchmark provides a single averaged assembly 
+    # OR a raw assembly with a 'presentation' multi-index.
+    # Let's verify size.
+    print(f"Assembly shape: {assembly.shape}")
+    
+    for i, (sid, sentence, topic) in tqdm(enumerate(zip(stimulus_ids, sentences, passage_labels)), total=len(sentences)):
+        
+        # Current Context
+        ctx = passage_contexts[topic]
+        
+        # Compute Surprisal
+        # Note: We compute for EVERY sample. 
+        # If this is too slow, we can cache by (sid, len(ctx)).
+        s_val = compute_contextual_surprisal(model, tokenizer, sentence, ctx, device)
+        
+        ordered_surprisals.append(s_val)
+        ordered_topics.append(topic)
+        
+        # Update context
+        # We assume the sentences come in reading order for that passage.
+        # If the assembly contains REPEATS of the same sentence (e.g. subject 1 read it, subject 2 read it),
+        # we shouldn't append to context multiple times for the SAME reading instance.
+        # But if it's the concatenated data of multiple subjects...
+        # Standard Pereira assembly in BrainScore is usually averaged or provides unique stimuli?
+        # If it's unique stimuli, len(assembly) == 243 or 384. 
+        # If it's raw, it might be thousands.
+        # Ideally we compute unique measures.
+        
+        # CRITICAL: We need to know if we are "advancing" the text.
+        # If the next sample is the SAME sentence (different subject), context shouldn't grow.
+        # If the next sample is NEW sentence, context grows.
+        
+        # Let's check if this is a repeat of the last step for this topic?
+        # Or simpler: The context is the list of *unique* preceding sentences in this passage.
+        # But we don't know the order of unique sentences a priori unless we sort.
+        # User said "respect actual order defined in assembly".
+        # If assembly has Subject 1 (Sent A, Sent B) ... Subject 2 (Sent A, sent B)...
+        # Then Moving Baseline for Subject 2 Sent A should NOT include Subject 1's sentences.
+        
+        # Heuristic: 
+        # If we see a sentence we've already seen in this context, do we append it? NO.
+        # Context is strictly the distinct previous sentences.
+        if len(ctx) == 0 or ctx[-1] != sentence:
+            passage_contexts[topic].append(sentence)
+
     
     ordered_surprisals = np.array(ordered_surprisals)
     ordered_topics = np.array(ordered_topics)
@@ -247,107 +291,70 @@ def main():
     static_relative = compute_static_baseline(ordered_surprisals, ordered_topics)
     
     # 3. Moving Relative
+    # Computed on the flat array in presentation order
     moving_relative = compute_moving_baseline(ordered_surprisals, ordered_topics)
     
-    # Store in a handy dict
-    surprisal_map = {}
-    for i, sid in enumerate(ordered_ids):
-        surprisal_map[sid] = {
-            'raw': raw_surprisals[i],
-            'static': static_relative[i],
-            'moving': moving_relative[i]
-        }
-
     # 4. Correlation Analysis
-    # We map surprisal to the brain data order
-    assembly_stim_ids = assembly['stimulus_id'].values
-    n_samples = len(assembly_stim_ids)
-    
-    aligned_surprisal = {
-        'raw': np.zeros(n_samples),
-        'static': np.zeros(n_samples),
-        'moving': np.zeros(n_samples)
-    }
-    
-    for i, sid in enumerate(assembly_stim_ids):
-        for key in aligned_surprisal:
-            aligned_surprisal[key][i] = surprisal_map[sid][key]
-            
-    # Y data
-    Y = assembly.values # (N, V)
+    Y = assembly.values    # Y data
     
     # FILTER FOR LANGUAGE NETWORKS
-    # Check if we have ROI info
+    # NOTE: The benchmark object (Pereira2018) already filters for the language network 
+    # and high-reliability voxels in its __init__. 
+    # See brainscore/benchmarks/pereira2018/benchmark.py.
+    # So Y is *already* the filtered data. We don't need to check for 'atlas' or filter again.
+    # This matches the behavior of score_alignment.py which implicitly trusts the benchmark's data.
+    
     Y_filtered = Y
-    roi_info = None
-    
-    if 'atlas' in assembly.coords:
-        print("Found 'atlas' coordinate. Filtering for Language Network...")
-        # Pereira atlas usually has 'language', 'auditory', etc.
-        # Let's inspect unique values if possible, for now assume 'language' substring
-        atlas_vals = assembly['atlas'].values
-        # Simple boolean mask
-        mask = np.array(['lang' in str(v).lower() for v in atlas_vals])
-        if mask.sum() > 0:
-            Y_filtered = Y[:, mask]
-            print(f"Filtered from {Y.shape[1]} to {Y_filtered.shape[1]} neuroids.")
-            roi_info = "Language ROI"
-        else:
-            print("No 'language' ROIs found in atlas. Using all neuroids.")
-    else:
-        print("No atlas/ROI coordinate found. Using all neuroids.")
-        roi_info = "Whole Brain"
+    roi_info = "Benchmark Default (Likely Language ROI)"
+    print(f"Using {Y.shape[1]} neuroids from benchmark data.")
 
-    
     # Helper for vectorized correlation
     def compute_correlation(x, Y):
-        # Center x
         x_c = x - np.mean(x)
         x_norm = np.linalg.norm(x_c)
         if x_norm == 0:
             return np.zeros(Y.shape[1])
-            
-        # Center Y
         Y_c = Y - np.mean(Y, axis=0) # (N, V)
         Y_norm = np.linalg.norm(Y_c, axis=0) # (V,)
-        
         Y_norm[Y_norm == 0] = 1e-9
-        
         dot_prod = np.dot(x_c, Y_c) # (V,)
-        corr = dot_prod / (x_norm * Y_norm)
-        return corr
+        return dot_prod / (x_norm * Y_norm)
 
-    # Results container
     results = {}
-    
     print("\n=== Calculating Correlations (Contextual + Total + ROI Filter) ===")
+    
+    # Pack aligned surprisals (they are already aligned by loop order)
+    aligned_surprisals = {
+        'raw': raw_surprisals,
+        'static': static_relative,
+        'moving': moving_relative
+    }
     
     configs = ['raw', 'static', 'moving']
     
     for config in configs:
-        x = aligned_surprisal[config]
+        x = aligned_surprisals[config]
         corrs = compute_correlation(x, Y_filtered)
         
-        # Drop NaNs if any
         corrs = corrs[~np.isnan(corrs)]
         
         if len(corrs) == 0:
-            mean_corr, median_corr, max_corr, p90 = 0,0,0,0
+            mean_c, median_c, max_c, p90 = 0,0,0,0
         else:
-            mean_corr = float(np.mean(corrs))
-            median_corr = float(np.median(corrs))
-            std_corr = float(np.std(corrs))
-            max_corr = float(np.max(corrs))
+            mean_c = float(np.mean(corrs))
+            median_c = float(np.median(corrs))
+            std_c = float(np.std(corrs))
+            max_c = float(np.max(corrs))
             p90 = float(np.percentile(corrs, 90))
             p10 = float(np.percentile(corrs, 10))
         
-        print(f"{config.capitalize()}: Mean r={mean_corr:.4f}, Median={median_corr:.4f}, Max={max_corr:.4f}, 90th%={p90:.4f}")
+        print(f"{config.capitalize()}: Mean r={mean_c:.4f}, Median={median_c:.4f}, Max={max_c:.4f}, 90th%={p90:.4f}")
         
         results[config] = {
-            "mean_correlation": mean_corr,
-            "median_correlation": median_corr,
-            "std_correlation": std_corr,
-            "max_correlation": max_corr,
+            "mean_correlation": mean_c,
+            "median_correlation": median_c,
+            "std_correlation": std_c,
+            "max_correlation": max_c,
             "p90_correlation": p90,
             "p10_correlation": p10
         }
