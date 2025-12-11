@@ -134,6 +134,19 @@ def main():
             # Same Weight Scores
             raw_partial_score_same_weight = score_result.attrs.get('partial_r2_same_weight')
             normalized_partial_score_same_weight = score_result.attrs.get('normalized_partial_r2_same_weight')
+            
+            # Training Scores
+            diagnostics = score_result.attrs.get('diagnostics')
+            if diagnostics:
+                 delta_r2_train_splits = diagnostics.get('delta_r2_train_per_split_neuroid')
+                 if delta_r2_train_splits:
+                     # Median per split
+                     score_per_split_train = [np.median(d) for d in delta_r2_train_splits]
+                     delta_r2_train = np.mean(score_per_split_train)
+                 else:
+                     delta_r2_train = 0.0
+            else:
+                 delta_r2_train = 0.0
 
             if normalized_partial_score is None:
                 print("Warning: normalized_partial_r2 not found or None. Validation might differ.")
@@ -156,14 +169,16 @@ def main():
             depth_scores.append({
                 "partialr2_best_weight": partialr2_best_weight,
                 "partial_r2_same_weight": partial_r2_same_weight,
+                "partial_train": delta_r2_train,
                 "partial_raw": raw_partial_score,
                 "llm": llm_score
             })
-            print(f"    Norm Partial (Best): {partialr2_best_weight:.4f}, Norm Partial (Same): {partial_r2_same_weight:.4f}, LLM: {llm_score:.4f}")
+            print(f"    Norm Partial (Best): {partialr2_best_weight:.4f}, Norm Partial (Same): {partial_r2_same_weight:.4f}, Train Partial: {delta_r2_train:.4f}, LLM: {llm_score:.4f}")
             
         # Average over seeds
         partials_best = [d['partialr2_best_weight'] for d in depth_scores]
         partials_same = [d['partial_r2_same_weight'] for d in depth_scores]
+        partials_train = [d['partial_train'] for d in depth_scores]
         llms = [d['llm'] for d in depth_scores]
         
         avg_partial_best = np.mean(partials_best)
@@ -171,6 +186,9 @@ def main():
         
         avg_partial_same = np.mean(partials_same)
         std_partial_same = np.std(partials_same)
+        
+        avg_partial_train = np.mean(partials_train)
+        std_partial_train = np.std(partials_train)
         
         avg_llm = np.mean(llms)
         std_llm = np.std(llms)
@@ -181,12 +199,15 @@ def main():
             "partialr2_best_weight_std": std_partial_best,
             "partial_r2_same_weight_mean": avg_partial_same,
             "partial_r2_same_weight_std": std_partial_same,
+            "partial_train_mean": avg_partial_train,
+            "partial_train_std": std_partial_train,
             "llm_mean": avg_llm,
             "llm_std": std_llm,
             "raw_scores": depth_scores
         })
         print(f"  Depth {depth} Avg Partial (Best): {avg_partial_best:.4f} +/- {std_partial_best:.4f}")
         print(f"  Depth {depth} Avg Partial (Same): {avg_partial_same:.4f} +/- {std_partial_same:.4f}")
+        print(f"  Depth {depth} Avg Partial (Train): {avg_partial_train:.4f} +/- {std_partial_train:.4f}")
         print(f"  Depth {depth} Avg LLM: {avg_llm:.4f} +/- {std_llm:.4f}")
 
     # Save results
@@ -224,6 +245,21 @@ def main():
     plot_path_llm = os.path.join(args.save_path, "depth_vs_llm_r2.png")
     plt.savefig(plot_path_llm)
     print(f"LLM-Only Plot saved to {plot_path_llm}")
+    plt.close()
+    
+    # Plot 3: Training Partial R2
+    plt.figure(figsize=(10, 6))
+    plt.errorbar(results_df["depth"], results_df["partial_train_mean"], yerr=results_df["partial_train_std"], fmt='-d', capsize=5, color='green', label='Training Partial R²')
+    plt.xlabel("Depth (Number of Transformer Blocks)")
+    plt.ylabel("Raw Partial R²")
+    plt.title(f"Layer-wise Alignment ({args.model} {'Untrained' if args.untrained else 'Trained'}, Pereira2018)\nTraining Partial R² (Raw)")
+    plt.grid(True)
+    plt.xticks(args.depths)
+    plt.legend()
+    
+    plot_path_train = os.path.join(args.save_path, "depth_vs_partial_r2_train.png")
+    plt.savefig(plot_path_train)
+    print(f"Training Partial R2 Plot saved to {plot_path_train}")
     plt.close()
 
     # Save info.json

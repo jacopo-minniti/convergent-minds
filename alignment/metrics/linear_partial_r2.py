@@ -34,6 +34,10 @@ def linear_partial_r2(
     r2_combined_splits = []
     r2_llm_splits = [] # New: LLM-only R2
     delta_r2_splits = []
+    # Training splits storage
+    r2_baseline_train_splits = []
+    r2_combined_train_splits = []
+    delta_r2_train_splits = []
     delta_r2_same_weight_splits = [] # New: Partial R2 with same weight
     pearson_r_splits = [] # New: for LLM-only Pearson r
     pearson_r_objective_splits = [] # New: for Objective-only Pearson r
@@ -185,11 +189,15 @@ def linear_partial_r2(
         sst_train = np.sum((y_train - y_train_mean)**2, axis=0)
         sst_train[sst_train == 0] = 1e-10
         r2_baseline_train = 1 - sse_baseline_train / sst_train
+        r2_baseline_train_splits.append(r2_baseline_train)
         
         # Combined Train
         y_pred_combined_train = model_combined.predict(X_combined_train_scaled)
         sse_combined_train = np.sum((y_train - y_pred_combined_train)**2, axis=0)
         r2_combined_train = 1 - sse_combined_train / sst_train
+        r2_combined_train_splits.append(r2_combined_train)
+
+        delta_r2_train_splits.append(r2_combined_train - r2_baseline_train)
         
         # [DEBUG] Feature Correlation (Objective vs LLM)
         # We can check the correlation between the predictions of the two models on the test set
@@ -278,6 +286,9 @@ def linear_partial_r2(
     diagnostics = {
         "r2_baseline_per_split_neuroid": r2_baseline_splits,
         "r2_combined_per_split_neuroid": r2_combined_splits,
+        "r2_baseline_train_per_split_neuroid": r2_baseline_train_splits,
+        "r2_combined_train_per_split_neuroid": r2_combined_train_splits,
+        "delta_r2_train_per_split_neuroid": delta_r2_train_splits,
         "delta_r2_per_split_neuroid": delta_r2_splits,
         "delta_r2_same_weight_per_split_neuroid": delta_r2_same_weight_splits,
         "pearson_r_splits": pearson_r_splits, # List of arrays
