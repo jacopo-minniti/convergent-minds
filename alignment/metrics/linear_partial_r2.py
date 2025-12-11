@@ -38,7 +38,6 @@ def linear_partial_r2(
     r2_baseline_train_splits = []
     r2_combined_train_splits = []
     delta_r2_train_splits = []
-    delta_r2_same_weight_splits = [] # New: Partial R2 with same weight
     pearson_r_splits = [] # New: for LLM-only Pearson r
     pearson_r_objective_splits = [] # New: for Objective-only Pearson r
     
@@ -167,19 +166,7 @@ def linear_partial_r2(
         
         # ΔR²
         delta_r2 = r2_combined - r2_baseline
-        
-        # --- New: Same Weight Partial R2 ---
-        # Force baseline to use combined alpha
-        model_baseline_forced = Ridge(alpha=best_alpha_combined)
-        model_baseline_forced.fit(X_obj_train_scaled, y_train)
-        y_pred_baseline_forced = model_baseline_forced.predict(X_obj_test_scaled)
-        
-        sse_baseline_forced = np.sum((y_test - y_pred_baseline_forced)**2, axis=0)
-        r2_baseline_forced = 1 - sse_baseline_forced / sst_test
-        
-        delta_r2_same = r2_combined - r2_baseline_forced
-        delta_r2_same_weight_splits.append(delta_r2_same)
-        # -----------------------------------
+
         
         # [DEBUG] Training R²
         # Baseline Train
@@ -245,10 +232,7 @@ def linear_partial_r2(
     # 4.4 Aggregation
     # Median across neuroids per split
     score_per_split = [np.median(d) for d in delta_r2_splits]
-    
-    # Same Weight Aggregation
-    score_same_weight_per_split = [np.median(d) for d in delta_r2_same_weight_splits]
-    alignment_score_same_weight = np.mean(score_same_weight_per_split)
+
 
     # Mean across splits
     alignment_score = np.mean(score_per_split)
@@ -290,12 +274,9 @@ def linear_partial_r2(
         "r2_combined_train_per_split_neuroid": r2_combined_train_splits,
         "delta_r2_train_per_split_neuroid": delta_r2_train_splits,
         "delta_r2_per_split_neuroid": delta_r2_splits,
-        "delta_r2_same_weight_per_split_neuroid": delta_r2_same_weight_splits,
         "pearson_r_splits": pearson_r_splits, # List of arrays
         "pearson_r_objective_splits": pearson_r_objective_splits,
         "score_per_split": score_per_split,
-        "score_same_weight_per_split": score_same_weight_per_split,
-        "alignment_score_same_weight": alignment_score_same_weight,
         "objective_explained_variance": objective_explained_variance,
         "obj_llm_explained_variance": obj_llm_explained_variance,
         "llm_explained_variance": llm_explained_variance,
