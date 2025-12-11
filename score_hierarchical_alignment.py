@@ -117,6 +117,9 @@ def main():
             # Score
             score_result = score(subject, benchmark)
             
+            # Extract scores
+            raw_partial_score = float(score_result.values) if score_result.values.size == 1 else np.mean(score_result.values)
+            
             # Training Scores from diagnostics
             diagnostics = score_result.attrs.get('diagnostics')
             delta_r2_train = 0.0
