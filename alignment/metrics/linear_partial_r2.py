@@ -1,5 +1,5 @@
 import numpy as np
-from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import RidgeCV, Ridge
 from sklearn.preprocessing import StandardScaler
 from typing import List, Tuple, Dict, Any
 from tqdm import tqdm
@@ -34,6 +34,7 @@ def linear_partial_r2(
     r2_combined_splits = []
     r2_llm_splits = [] # New: LLM-only R2
     delta_r2_splits = []
+    delta_r2_same_weight_splits = [] # New: Partial R2 with same weight
     pearson_r_splits = [] # New: for LLM-only Pearson r
     pearson_r_objective_splits = [] # New: for Objective-only Pearson r
     
@@ -87,6 +88,9 @@ def linear_partial_r2(
         y_pred_combined_test = model_combined.predict(X_combined_test_scaled)
         if hasattr(model_combined, 'alpha_'):
             alphas_combined.append(model_combined.alpha_)
+            best_alpha_combined = model_combined.alpha_
+        else:
+            best_alpha_combined = 1.0 # Fallback should not happen with RidgeCV
 
         # Use Joint Model predictions for combined performance
         y_pred_combined = y_pred_combined_test
@@ -159,6 +163,19 @@ def linear_partial_r2(
         
         # ΔR²
         delta_r2 = r2_combined - r2_baseline
+        
+        # --- New: Same Weight Partial R2 ---
+        # Force baseline to use combined alpha
+        model_baseline_forced = Ridge(alpha=best_alpha_combined)
+        model_baseline_forced.fit(X_obj_train_scaled, y_train)
+        y_pred_baseline_forced = model_baseline_forced.predict(X_obj_test_scaled)
+        
+        sse_baseline_forced = np.sum((y_test - y_pred_baseline_forced)**2, axis=0)
+        r2_baseline_forced = 1 - sse_baseline_forced / sst_test
+        
+        delta_r2_same = r2_combined - r2_baseline_forced
+        delta_r2_same_weight_splits.append(delta_r2_same)
+        # -----------------------------------
         
         # [DEBUG] Training R²
         # Baseline Train
