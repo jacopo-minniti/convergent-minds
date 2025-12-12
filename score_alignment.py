@@ -342,7 +342,19 @@ def main():
         
         # Case 1: Main score values (partial R2)
         if attr_name is None and diag_key is None:
-            v = res.values
+            # Check for 'raw' attribute first which contains unaggregated scores
+            # BrainScore often stores the raw (e.g. per-split) scores in attrs['raw']
+            raw = res.attrs.get('raw')
+            if raw is not None:
+                if hasattr(raw, 'values'):
+                     v = raw.values
+                else:
+                     v = raw
+            else:
+                v = res.values
+            
+            # Flatten whatever we got (scalar or array)
+            v = np.array(v)
             if v.ndim == 0:
                 values = [float(v)]
             else:
@@ -350,15 +362,17 @@ def main():
         
         # Case 2: Attribute (e.g., correlation)
         # BrainScore attributes are often just scalars, but if we had raw ones we'd grab them here.
-        # Currently, objective_alignment_score is usually a scalar.
         elif attr_name:
             val = res.attrs.get(attr_name)
             if val is not None:
-                # If it's a scalar, wrap it. If it's a list/array, use it.
-                if isinstance(val, (int, float, np.number)):
+                if hasattr(val, 'values'): # Just in case it's a DataArray
+                     val = val.values
+                
+                val = np.array(val)
+                if val.ndim == 0:
                     values = [float(val)]
-                elif isinstance(val, (list, tuple, np.ndarray)):
-                    values = np.array(val).flatten().tolist()
+                else:
+                    values = val.flatten().tolist()
         
         # Case 3: Diagnostics (variance metrics)
         elif diag_key:
@@ -372,10 +386,11 @@ def main():
             
             val = diag.get(diag_key)
             if val is not None:
-                if isinstance(val, (int, float, np.number)):
+                val = np.array(val)
+                if val.ndim == 0:
                     values = [float(val)]
-                elif isinstance(val, (list, tuple, np.ndarray)):
-                    values = np.array(val).flatten().tolist()
+                else:
+                    values = val.flatten().tolist()
 
         return values
 
@@ -388,13 +403,10 @@ def main():
             "partial": [extract_raw_values(r) for r in all_results],
             
             # For correlations, we typically only get one value per seed (the Pearson R on the aggregate).
-            # If the benchmark provided per-fold correlations, we would extract them here.
-            # For now, we save what we have (likely 1 per seed), but consistent format.
             "objective_corr": [extract_raw_values(r, attr_name='objective_alignment_score') for r in all_results],
             "llm_corr": [extract_raw_values(r, attr_name='original_alignment_score') for r in all_results],
             
             # Explained variances often come from raw diagnostics which might contain per-fold data
-            # if the metric implementation supports it. If not, it's 1 per seed.
             "objective_var": [extract_raw_values(r, diag_key='objective_explained_variance') for r in all_results],
             "llm_only_var": [extract_raw_values(r, diag_key='llm_explained_variance') for r in all_results],
             "joint_var": [extract_raw_values(r, diag_key='obj_llm_explained_variance') for r in all_results],
