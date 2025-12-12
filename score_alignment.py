@@ -339,51 +339,79 @@ def main():
     def extract_raw_values(res, attr_name=None, diag_key=None):
         import numpy as np
         values = []
+
+        # Helper to safely get diag
+        diag = res.attrs.get('diagnostics', {})
+        if isinstance(diag, str):
+            try:
+                import ast
+                diag = ast.literal_eval(diag)
+            except:
+                diag = {}
+
+        # Mappings for specific metrics to their list-based diagnostic keys
+        # If extraction is requested via diag_key, we check if there's a corresponding LIST key first.
+        # e.g. 'objective_explained_variance' -> 'score_per_split_objective' or 'r2_baseline_per_split_neuroid'
+        
+        # Override extraction for specific cases where we know the split-key
+        target_list = None
+        if diag_key == 'score_per_split': # Special case for partial
+             target_list = diag.get('score_per_split')
+        elif diag_key == 'llm_explained_variance': # llm_only_var
+             target_list = diag.get('score_per_split_llm')
+        elif diag_key == 'objective_explained_variance': # objective_var
+             target_list = diag.get('score_per_split_objective')
+        elif diag_key == 'obj_llm_explained_variance': # joint_var
+             # We didn't explicitly create 'score_per_split_joint' but we have 'r2_combined_per_split_neuroid'
+             # We can compute median per split if needed, or assume we didn't add it.
+             # Actually, linear_partial_r2 computes `obj_llm_explained_variance` as mean of medians of `r2_combined_splits`.
+             # So we can look for `r2_combined_per_split_neuroid` and take medians.
+             raw_neuroid = diag.get('r2_combined_per_split_neuroid')
+             if raw_neuroid:
+                 target_list = [np.median(x) for x in raw_neuroid]
+
+        if target_list is not None:
+             values = np.array(target_list).flatten().tolist()
+             return values
+
+        # Fallback to standard extraction
         
         # Case 1: Main score values (partial R2)
         if attr_name is None and diag_key is None:
-            # Check for 'raw' attribute first which contains unaggregated scores
-            # BrainScore often stores the raw (e.g. per-split) scores in attrs['raw']
-            raw = res.attrs.get('raw')
-            if raw is not None:
-                if hasattr(raw, 'values'):
-                     v = raw.values
+             # Try diagnostics first for Partial R2
+             if 'score_per_split' in diag:
+                 v = diag['score_per_split']
+             else:
+                # Check for 'raw' attribute
+                raw = res.attrs.get('raw')
+                if raw is not None:
+                    if hasattr(raw, 'values'):
+                        v = raw.values
+                    else:
+                        v = raw
                 else:
-                     v = raw
-            else:
-                v = res.values
+                    v = res.values
             
-            # Flatten whatever we got (scalar or array)
-            v = np.array(v)
-            if v.ndim == 0:
+             v = np.array(v)
+             if v.ndim == 0:
                 values = [float(v)]
-            else:
+             else:
                 values = v.flatten().tolist()
         
-        # Case 2: Attribute (e.g., correlation)
-        # BrainScore attributes are often just scalars, but if we had raw ones we'd grab them here.
+        # Case 2: Attribute
         elif attr_name:
             val = res.attrs.get(attr_name)
             if val is not None:
-                if hasattr(val, 'values'): # Just in case it's a DataArray
+                if hasattr(val, 'values'):
                      val = val.values
-                
                 val = np.array(val)
                 if val.ndim == 0:
                     values = [float(val)]
                 else:
                     values = val.flatten().tolist()
         
-        # Case 3: Diagnostics (variance metrics)
+        # Case 3: Diagnostics fallback (scalars)
         elif diag_key:
-            diag = res.attrs.get('diagnostics', {})
-            if isinstance(diag, str):
-                try:
-                    import ast
-                    diag = ast.literal_eval(diag)
-                except:
-                    diag = {}
-            
             val = diag.get(diag_key)
             if val is not None:
                 val = np.array(val)
@@ -400,7 +428,8 @@ def main():
         "seeds": seeds,
         "raw_scores": {
             # Structure: key -> list of lists (one list per seed)
-            "partial": [extract_raw_values(r) for r in all_results],
+            # partial maps to score_per_split in diagnostics implicitly via logic above
+            "partial": [extract_raw_values(r, diag_key='score_per_split') for r in all_results],
             
             # For correlations, we typically only get one value per seed (the Pearson R on the aggregate).
             "objective_corr": [extract_raw_values(r, attr_name='objective_alignment_score') for r in all_results],

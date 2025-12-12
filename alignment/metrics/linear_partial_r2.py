@@ -270,13 +270,16 @@ def linear_partial_r2(
     diagnostics = {
         "r2_baseline_per_split_neuroid": r2_baseline_splits,
         "r2_combined_per_split_neuroid": r2_combined_splits,
+        "r2_llm_per_split_neuroid": r2_llm_splits, # Added per-split neuroid data
         "r2_baseline_train_per_split_neuroid": r2_baseline_train_splits,
         "r2_combined_train_per_split_neuroid": r2_combined_train_splits,
         "delta_r2_train_per_split_neuroid": delta_r2_train_splits,
         "delta_r2_per_split_neuroid": delta_r2_splits,
         "pearson_r_splits": pearson_r_splits, # List of arrays
         "pearson_r_objective_splits": pearson_r_objective_splits,
-        "score_per_split": score_per_split,
+        "score_per_split": score_per_split, # Partial R2 per split (List of floats)
+        "score_per_split_llm": r2_llm_per_split, # Added: LLM R2 per split (List of floats)
+        "score_per_split_objective": r2_baseline_per_split, # Added: Objective R2 per split (List of floats)
         "objective_explained_variance": objective_explained_variance,
         "obj_llm_explained_variance": obj_llm_explained_variance,
         "llm_explained_variance": llm_explained_variance,

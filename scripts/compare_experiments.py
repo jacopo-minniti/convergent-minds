@@ -35,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="Compare two experiments using statistical significance tests.")
     parser.add_argument("path_a", help="Path to experiment directory A")
     parser.add_argument("path_b", help="Path to experiment directory B")
-    parser.add_argument("--metric", default="partial", help="Metric to compare (partial, objective_corr, llm_corr). Default: partial")
+    parser.add_argument("--metric", default="llm_only_var", help="Metric to compare (partial, objective_corr, llm_corr, llm_only_var). Default: llm_only_var")
     args = parser.parse_args()
     
     # Paths might be the directory or the info.json file. Normalize to directory.
@@ -70,7 +70,7 @@ def main():
                 "objective_corr": "objective_corr",
                 "llm_corr": "llm_corr",
                 "objective_var": "objective_var",
-                "llm_only_var": "llm_only_var",
+                "llm_only_var": "llm_only_var", # From extract_raw_values with diag_key='llm_explained_variance'
                  "joint_var": "joint_var"
             }
             key = key_map.get(metric, metric)
@@ -101,6 +101,13 @@ def main():
                 vals = scores['correlation']['objective']
             elif metric == "llm_corr":
                 vals = scores['correlation']['llm']
+            elif metric == "llm_only_var":
+                # Check if new structure supports it or fallback
+                # info.json stores 'llm_only' under 'explained_variance'
+                vals = scores['explained_variance'].get('llm_only')
+                if vals is None:
+                     print(f"Metric {metric} not found in aggregated scores (old format?).")
+                     sys.exit(1)
             else:
                 # Try to find it generically or fail
                  print(f"Metric {metric} not supported for legacy aggregated files.")
