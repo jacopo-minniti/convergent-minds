@@ -96,7 +96,7 @@ If you use this code in your research, please cite:
 ```bibtex
 @software{convergent_minds,
   title = {Convergent Minds: A Platform for Brain-Aligned Language Models},
-  author = Jacopo,
+  author = Minniti, J,
   year = {2024},
   url = {https://github.com/jacopo-minniti/convergent-minds}
 }
