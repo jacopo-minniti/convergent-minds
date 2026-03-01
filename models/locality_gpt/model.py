@@ -108,7 +108,6 @@ class LocalityGPT2Attention(GPT2Attention):
         if self.scale_attn_weights:
             attn_weights = attn_weights / (float(value.size(-1)) ** 0.5)
 
-        # --- START: Configurable Exponential Decay ---
         query_length, key_length = query.size(-2), key.size(-2)
 
         # Apply decay only during self-attention and if decay_rate is non-zero.
@@ -132,8 +131,6 @@ class LocalityGPT2Attention(GPT2Attention):
             
             # Broadcast penalty to match attn_weights dimensions
             attn_weights = attn_weights - decay_penalty.unsqueeze(0).unsqueeze(0)
-        
-        # --- END: Configurable Exponential Decay ---
 
         if not self.is_cross_attention:
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].bool()
