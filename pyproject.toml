@@ -3,10 +3,12 @@
 ################################################################
 
 [project]
-name = "brainscore"
+name = "convminds"
 version = "2.1.0"
 description = ""
-authors = []
+authors = [
+    { name = "Jacopo Minniti", email = "jacopo.minniti004@gmail.com" }
+]
 license = { 'file' = 'LICENSE' }
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,13 +17,21 @@ dependencies = [
     "tqdm",
     "numpy>=1.21",
     "brainscore-core",
+    "brainio",
     "fire",
     "scikit-learn",
+    "xarray",
+    "scipy",
+    "pandas",
+    "datasets",
+    "result-caching",
     # model_helpers dependencies
     "torch>=1.9.1",
     "transformers>=4.11.3",
     "gensim",
     "joblib",
+    "matplotlib",
+    "seaborn",
     # submission dependencies
     "requests",
     "wordfreq>=3.0.0"
@@ -70,8 +80,13 @@ markers = [
 #### setuptools packaging config ####
 ################################################################
 
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["convminds*"]
+
 [tool.setuptools.package-data]
-# include non-python files (e.g. 'requirements.txt') in package install
-"brainscore.benchmarks" = ["**"]
-"brainscore.data" = ["**"]
-"brainscore.metrics" = ["**"]
+# include non-python files in package install
+"convminds" = ["**/*.json", "**/*.csv", "**/*.txt", "**/requirements.txt"]

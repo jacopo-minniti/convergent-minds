@@ -2,106 +2,85 @@
 
 ![Convergent Minds Logo](logo.png)
 
-**Convergent Minds** is a research platform for evaluating computational models of language on their alignment with human brain activity and behavior. This repository provides tools to:
+Convergent Minds is a research codebase for brain alignment workflows where:
+- benchmarks are data containers,
+- metrics are selected independently,
+- pipelines are composed explicitly in Python,
+- components are imported directly via `convminds` (no registries).
 
-- **Score language models** against neural and behavioral benchmarks
-- **Localize language-selective units** in neural networks
-- **Measure brain alignment** of model representations with fMRI data
+## Setup
 
-The platform is built on top of Brain-Score and provides a simplified, modular API for researchers working at the intersection of neuroscience and AI.
+### 1. Create and activate a virtual environment
 
-## Features
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
-- 🧠 **Neural Benchmarks**: Evaluate models on fMRI datasets (Pereira2018, Fedorenko2016, etc.)
-- 🎯 **Localization**: Identify language-selective units using functional localizers
-- 🤖 **Model Support**: Easy integration with HuggingFace models and custom architectures
-- 📊 **Behavioral Tasks**: Test models on reading times, next-word prediction, and more
-
-## Quick Start
-
-### Installation
+### 2. Install the project
 
 ```bash
 pip install -e "."
 ```
 
-### Basic Usage
-
-Score a model on a benchmark:
+### 3. Optional: install extra runtime dependencies used by analysis scripts
 
 ```bash
-python main.py --model distilgpt2 --benchmark Pereira2018.384sentences-cka
+pip install torch transformers numpy pandas scipy tqdm xarray matplotlib seaborn
 ```
 
-Use an untrained model:
+### 4. Optional: download Fedorenko2010 stimuli (for localization utilities)
 
 ```bash
-python main.py --model distilgpt2 --untrained --benchmark Pereira2018.384sentences-cka
+wget "https://www.dropbox.com/sh/c9jhmsy4l9ly2xx/AACQ41zipSZFj9mFbDfJJ9c4a?e=1&dl=1" -O fedorenko10_stimuli.zip
+mkdir -p data/fedorenko10_stimuli
+unzip -o fedorenko10_stimuli.zip -d data/fedorenko10_stimuli
 ```
 
-Perform localization before scoring:
+## Project Layout
 
-```bash
-python main.py --model distilgpt2 --localize --num-units 1000 --benchmark Pereira2018.384sentences-cka
-```
-
-## Repository Structure
-
-```
+```text
 convergent-minds/
-├── brainscore/          # Core library for benchmarks, metrics, and data
-├── models/              # Model implementations (GPT, RNNG, etc.)
-├── alignment/           # Brain alignment scoring scripts
-├── localization/        # Language localization tools
-├── scripts/             # Utility scripts
-└── main.py             # Main entry point for scoring
+├── convminds/
+│   ├── alignment/
+│   ├── benchmarks/
+│   ├── brainscore/        # internal legacy core modules (integrated under convminds)
+│   ├── datasets/
+│   ├── localization/
+│   ├── metrics/
+│   └── subjects/
+├── data/
+└── test.py
 ```
 
-## Advanced Usage
+## Decoupled Pipeline Example
 
-### Brain Alignment Scoring
-
-For more advanced brain alignment analysis:
+Run the root example:
 
 ```bash
-python alignment/score_brain_alignment.py \
-    --model-name gpt2 \
-    --benchmark-name Pereira2018.384sentences-cka \
-    --savepath scores.pkl
+python test.py --benchmark synthetic
 ```
 
-### Custom Models
+This runs a full pipeline and prints:
+- model R2 score,
+- objective-feature subject R2 score,
+- `delta_r2 = model_r2 - objective_r2`.
 
-You can easily integrate custom models by implementing the `ArtificialSubject` interface. See the `models/` directory for examples.
+Minimal direct-import example:
 
-## Available Benchmarks
+```python
+from convminds import metrics, get_benchmark_by_id, score_model_on_benchmark
+from convminds.subjects import HFLLMSubject
 
-- **Pereira2018**: fMRI responses to sentences
-- **Fedorenko2016**: Language network localization
-- **Futrell2018**: Reading time predictions
-- **SyntaxGym2020**: Syntactic generalization tests
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-MIT License
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@software{convergent_minds,
-  title = {Convergent Minds: A Platform for Brain-Aligned Language Models},
-  author = {Minniti, J},
-  year = {2024},
-  url = {https://github.com/jacopo-minniti/convergent-minds}
-}
+benchmark = get_benchmark_by_id("Pereira2018.243sentences")
+subject = HFLLMSubject("gpt2")
+metric = metrics.linear_pearsonr()
+score = score_model_on_benchmark(subject, benchmark, metric=metric)
 ```
 
-## Acknowledgments
+## Notes
 
-This project builds upon [Brain-Score](https://www.brain-score.org/) and incorporates research from the neuroscience and NLP communities.
+- `Pereira2018` benchmarks are data-only (`Pereira2018.243sentences`, `Pereira2018.384sentences`).
+- Metric selection happens in the alignment pipeline (`convminds/alignment/pipeline.py`).
+- `HFLLMSubject` provides a convenience abstraction over HuggingFace model IDs.
+- `ObjectiveFeatureSubject` lets objective features be scored exactly like any other subject.
