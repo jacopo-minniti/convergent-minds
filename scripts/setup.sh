@@ -47,8 +47,8 @@ echo
 
 echo "[5/5] Unzipping stimuli..."
 # The destination directory is based on the README.md
-mkdir -p language-localization/fedorenko10_stimuli
-unzip -o fedorenko10_stimuli.zip -d language-localization/fedorenko10_stimuli
+mkdir -p data/fedorenko10_stimuli
+unzip -o fedorenko10_stimuli.zip -d data/fedorenko10_stimuli
 echo "Done."
 echo
 

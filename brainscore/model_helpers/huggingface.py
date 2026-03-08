@@ -44,7 +44,7 @@ def get_layer_names(model_id: str, model_type: str = None) -> List[str]:
         # OPT-like models
         "opt": "model.decoder.layers.{}",
         # BERT-like models
-        "bert": "encoder.layer.{}",
+        "bert": "bert.encoder.layer.{}",
         "roberta": "encoder.layer.{}",
         "distilbert": "transformer.layer.{}",
         "deberta": "encoder.layer.{}",
@@ -97,6 +97,7 @@ class HuggingfaceSubject(ArtificialSubject):
             localizer_kwargs=None,
             device: str = None,
             task_heads: Union[None, Dict[ArtificialSubject.Task, Callable]] = None,
+            representation_token_index: int = -1,
     ):
         """
             :param model_id: the model id i.e. name
@@ -109,6 +110,8 @@ class HuggingfaceSubject(ArtificialSubject):
                 (:class:`~brainscore.artificial_subject.ArtificialSubject.Task`) to a function outputting the
                 requested task output, given the basemodel's base output
                 (:class:`~transformers.modeling_outputs.CausalLMOutput`).
+            :param representation_token_index: the index of the token to use for representation extraction. 
+                Defaults to -1 (last token).
         """
         self._logger = logging.getLogger(fullname(self))
         self.model_id = model_id
@@ -126,6 +129,7 @@ class HuggingfaceSubject(ArtificialSubject):
 
         self.neural_recordings: List[Tuple] = []  # list of `(recording_target, recording_type)` tuples to record
         self.behavioral_task: Union[None, ArtificialSubject.Task] = None
+        self.representation_token_index = representation_token_index
         task_mapping_default = {
             ArtificialSubject.Task.next_word: self.predict_next_word,
             ArtificialSubject.Task.reading_times: self.estimate_reading_times,
@@ -297,7 +301,7 @@ class HuggingfaceSubject(ArtificialSubject):
     def output_to_representations(self, layer_representations: Dict[Tuple[str, str, str], np.ndarray], stimuli_coords):
         representation_values = np.concatenate([
             # Choose to use last token (-1) of values[batch, token, unit] to represent passage.
-            values[:, -1:, :].squeeze(0).cpu() for values in layer_representations.values()],
+            values[:, self.representation_token_index, :].reshape(values.shape[0], -1).cpu() for values in layer_representations.values()],
             axis=-1)  # concatenate along neuron axis
         neuroid_coords = {
             'layer': ('neuroid', np.concatenate([[layer] * values.shape[-1]

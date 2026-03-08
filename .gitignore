@@ -1,6 +1,5 @@
 .env
 .venv/
-language-localization/fedorenko10_stimuli
 logs/
 jobs/
 dumps/
@@ -14,7 +13,9 @@ __pycache__/
 
 # Folders
 xarray_test/*
-data/*
+data/
+data/fedorenko10_stimuli
+prev-brain-alignment
 
 # C extensions
 *.so

@@ -108,7 +108,6 @@ class LocalityGPT2Attention(GPT2Attention):
         if self.scale_attn_weights:
             attn_weights = attn_weights / (float(value.size(-1)) ** 0.5)
 
-        # --- START: Configurable Exponential Decay ---
         query_length, key_length = query.size(-2), key.size(-2)
 
         # Apply decay only during self-attention and if decay_rate is non-zero.
@@ -123,12 +122,15 @@ class LocalityGPT2Attention(GPT2Attention):
             distance_matrix = torch.abs(i_indices - j_indices)
             
             # Apply exponential decay: exp(-decay_rate * distance)
-            decay_matrix = torch.exp(-self.decay_rate * distance_matrix.to(attn_weights.dtype))
+            # We want to penalize distant tokens.
+            # Standard attention: softmax(Q K^T / sqrt(d))
+            # Local attention: softmax(Q K^T / sqrt(d) - decay * distance)
+            # This is equivalent to multiplying probabilities by exp(-decay * distance)
             
-            # Broadcast decay_matrix to match attn_weights dimensions
-            attn_weights = attn_weights * decay_matrix.unsqueeze(0).unsqueeze(0)
-        
-        # --- END: Configurable Exponential Decay ---
+            decay_penalty = self.decay_rate * distance_matrix.to(attn_weights.dtype)
+            
+            # Broadcast penalty to match attn_weights dimensions
+            attn_weights = attn_weights - decay_penalty.unsqueeze(0).unsqueeze(0)
 
         if not self.is_cross_attention:
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].bool()
@@ -167,7 +169,13 @@ class LocalityGPT2(HuggingfaceSubject):
 
         # Replace standard attention layers with our locality-biased version
         for i, layer in enumerate(model.transformer.h):
-            layer.attn = LocalityGPT2Attention(model.config, layer_idx=i, decay_rate=decay_rate)
+            old_attn = layer.attn
+            new_attn = LocalityGPT2Attention(model.config, layer_idx=i, decay_rate=decay_rate)
+            
+            # Copy weights from the original attention layer
+            new_attn.load_state_dict(old_attn.state_dict())
+            
+            layer.attn = new_attn
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, truncation_side='left')
         if tokenizer.pad_token is None:

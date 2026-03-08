@@ -132,7 +132,7 @@ if __name__ == "__main__":
     # --- Dataset and Dataloader ---
     if args.dataset_name == "fedorenko10":
         # Path to the Fedorenko2010 stimuli
-        dirpath = f"language-localization/fedorenko10_stimuli"
+        dirpath = f"data/fedorenko10_stimuli"
         lang_dataset = Fed10_LocLangDataset(dirpath, is_pretrained=True)
     else:
         raise ValueError(f"Dataset {args.dataset_name} not implemented")
