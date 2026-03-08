@@ -1,19 +1,18 @@
-from . import metrics
-from .benchmarks import get_benchmark_by_id, PereiraSentencesBenchmark
-from .datasets import Pereira2018LanguageDataset, Pereira2018AuditoryDataset
-from .pipeline import score_model_on_benchmark, collect_model_activations, build_cv_splits
-from .subjects import ArtificialSubject, HFLLMSubject, ObjectiveFeatureSubject
+from . import metrics, pipelines
+from .benchmarks import Benchmark, GLMBenchmark, InMemoryBenchmark
+from .cache import display_score
+from .decoders import Decoder, LinearDecoder
+from .subjects import HFArtificialSubject, HumanSubject
 
 __all__ = [
     "metrics",
-    "get_benchmark_by_id",
-    "PereiraSentencesBenchmark",
-    "Pereira2018LanguageDataset",
-    "Pereira2018AuditoryDataset",
-    "score_model_on_benchmark",
-    "collect_model_activations",
-    "build_cv_splits",
-    "ArtificialSubject",
-    "HFLLMSubject",
-    "ObjectiveFeatureSubject",
+    "pipelines",
+    "Benchmark",
+    "GLMBenchmark",
+    "InMemoryBenchmark",
+    "HumanSubject",
+    "HFArtificialSubject",
+    "Decoder",
+    "LinearDecoder",
+    "display_score",
 ]

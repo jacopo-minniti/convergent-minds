@@ -1,3 +1,3 @@
-from convminds.alignment.pipeline import score_model_on_benchmark, collect_model_activations, build_cv_splits
+from convminds.pipelines import PipelineResult, run_basic_decoder_pipeline
 
-__all__ = ["score_model_on_benchmark", "collect_model_activations", "build_cv_splits"]
+__all__ = ["PipelineResult", "run_basic_decoder_pipeline"]

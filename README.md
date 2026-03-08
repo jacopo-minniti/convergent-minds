@@ -2,85 +2,133 @@
 
 ![Convergent Minds Logo](logo.png)
 
-Convergent Minds is a research codebase for brain alignment workflows where:
-- benchmarks are data containers,
-- metrics are selected independently,
-- pipelines are composed explicitly in Python,
-- components are imported directly via `convminds` (no registries).
+Convergent Minds now centers on a benchmark-driven decoding workflow:
+
+- a `Benchmark` owns stimuli, human recording metadata, and split policy,
+- a `HumanSubject` and an `HFArtificialSubject` both `record(benchmark)` into aligned train/test splits,
+- a `Decoder` is trained from brain space to model space,
+- scores and prepared artifacts can be cached under `CONVMINDS_HOME`.
 
 ## Setup
-
-### 1. Create and activate a virtual environment
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-### 2. Install the project
-
-```bash
 pip install -e "."
 ```
 
-### 3. Optional: install extra runtime dependencies used by analysis scripts
+Optional runtime packages for the real Pereira/HuggingFace path:
 
 ```bash
-pip install torch transformers numpy pandas scipy tqdm xarray matplotlib seaborn
+pip install torch transformers brainio xarray
 ```
 
-### 4. Optional: download Fedorenko2010 stimuli (for localization utilities)
+## Cache Layout
+
+`CONVMINDS_HOME` defaults to `~/.convminds`.
+
+- `benchmarks/`: cached split manifests
+- `human/`: prepared human recordings
+- `activations/`: cached artificial activations when opt-in saving is enabled
+- `scores/`: saved score summaries and diagnostics
+
+Human recordings and benchmark split manifests are saved by default. Artificial activations are always looked up in cache first, but they are saved only when `save_cache=True`. Scores are saved only when `save_score=True`.
+
+## Core API
+
+```python
+from convminds import GLMBenchmark, HumanSubject, HFArtificialSubject, LinearDecoder
+from convminds.metrics import linear_r2
+
+benchmark = GLMBenchmark(
+    "pereira2018",
+    experiment="243sentences",
+    cv=1,
+    topic_splitting=True,
+)
+
+humans = HumanSubject()
+model = HFArtificialSubject("openai/gpt2", trained=True)
+
+print(model.neurons, humans.neurons)
+print(benchmark.stimuli)
+
+humans.record(benchmark)
+model.record(benchmark, save_cache=False)
+
+decoder = LinearDecoder(loss="mse", l2_penalty=0.01)
+decoder.train(humans.neurons[0]["train"], model.neurons[0]["train"])
+
+score = linear_r2(decoder, humans.neurons[0]["test"], model.neurons[0]["test"])
+print(score)
+```
+
+Notes:
+
+- Pereira requires an explicit subset. `GLMBenchmark("pereira2018")` without `experiment=` is invalid.
+- `cv=1` produces one train/test split with a default `train_size=0.9`.
+- Topic splitting keeps topics together and also prevents duplicate sentence text from leaking across train/test.
+
+## Pipelines
+
+`convminds.pipelines` contains prebuilt workflows. The first one is `run_basic_decoder_pipeline(...)`:
+
+```python
+from convminds import HumanSubject, HFArtificialSubject, GLMBenchmark, LinearDecoder
+from convminds.pipelines import run_basic_decoder_pipeline
+
+result = run_basic_decoder_pipeline(
+    artificial_subject=HFArtificialSubject("openai/gpt2", trained=True),
+    human_subject=HumanSubject(),
+    benchmark=GLMBenchmark("pereira2018", experiment="243sentences"),
+    decoder=LinearDecoder(loss="mse", l2_penalty=0.01),
+    save_activations=False,
+    save_score=True,
+)
+
+print(result)
+```
+
+If a score was saved, it can be displayed later with:
+
+```python
+import convminds
+
+convminds.display_score(
+    artificial_subject="openai/gpt2",
+    benchmark="pereira2018.243sentences.glm",
+)
+```
+
+## Local Smoke Test
+
+`test.py` is a fully local synthetic example that does not need Pereira downloads or HuggingFace weights:
 
 ```bash
-wget "https://www.dropbox.com/sh/c9jhmsy4l9ly2xx/AACQ41zipSZFj9mFbDfJJ9c4a?e=1&dl=1" -O fedorenko10_stimuli.zip
-mkdir -p data/fedorenko10_stimuli
-unzip -o fedorenko10_stimuli.zip -d data/fedorenko10_stimuli
+python3 test.py
+python3 test.py --cv 3 --save-score
 ```
+
+It exercises:
+
+- benchmark-owned split planning,
+- aligned human and artificial recordings,
+- `LinearDecoder` training,
+- `linear_r2` scoring,
+- cached score display.
 
 ## Project Layout
 
 ```text
 convergent-minds/
 ├── convminds/
-│   ├── alignment/
 │   ├── benchmarks/
-│   ├── brainscore/        # internal legacy core modules (integrated under convminds)
-│   ├── datasets/
-│   ├── localization/
+│   ├── brainscore/
+│   ├── cache.py
+│   ├── decoders/
 │   ├── metrics/
+│   ├── pipelines/
 │   └── subjects/
-├── data/
+├── tests/
 └── test.py
 ```
-
-## Decoupled Pipeline Example
-
-Run the root example:
-
-```bash
-python test.py --benchmark synthetic
-```
-
-This runs a full pipeline and prints:
-- model R2 score,
-- objective-feature subject R2 score,
-- `delta_r2 = model_r2 - objective_r2`.
-
-Minimal direct-import example:
-
-```python
-from convminds import metrics, get_benchmark_by_id, score_model_on_benchmark
-from convminds.subjects import HFLLMSubject
-
-benchmark = get_benchmark_by_id("Pereira2018.243sentences")
-subject = HFLLMSubject("gpt2")
-metric = metrics.linear_pearsonr()
-score = score_model_on_benchmark(subject, benchmark, metric=metric)
-```
-
-## Notes
-
-- `Pereira2018` benchmarks are data-only (`Pereira2018.243sentences`, `Pereira2018.384sentences`).
-- Metric selection happens in the alignment pipeline (`convminds/alignment/pipeline.py`).
-- `HFLLMSubject` provides a convenience abstraction over HuggingFace model IDs.
-- `ObjectiveFeatureSubject` lets objective features be scored exactly like any other subject.

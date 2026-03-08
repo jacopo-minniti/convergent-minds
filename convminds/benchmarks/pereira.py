@@ -1,25 +1,12 @@
-from dataclasses import dataclass
+from __future__ import annotations
 
-from convminds.datasets import Pereira2018LanguageDataset
-from convminds.interfaces import Benchmark
-
-
-@dataclass
-class PereiraSentencesBenchmark(Benchmark):
-    experiment: str
-
-    def __post_init__(self):
-        self.identifier = f"Pereira2018.{self.experiment}"
-        data = Pereira2018LanguageDataset().load()
-        data = data.sel(experiment=self.experiment)
-        data = data.dropna("neuroid")
-        data.attrs["identifier"] = f"{data.identifier}.{self.experiment}"
-        self.data = data
+from convminds.benchmarks.glm import GLMBenchmark
 
 
 def get_benchmark_by_id(identifier: str):
-    if identifier in {"Pereira2018.243sentences", "Pereira2018.243sentences-linear"}:
-        return PereiraSentencesBenchmark("243sentences")
-    if identifier in {"Pereira2018.384sentences", "Pereira2018.384sentences-linear"}:
-        return PereiraSentencesBenchmark("384sentences")
+    normalized = identifier.strip()
+    if normalized in {"Pereira2018.243sentences", "pereira2018.243sentences"}:
+        return GLMBenchmark("pereira2018", experiment="243sentences")
+    if normalized in {"Pereira2018.384sentences", "pereira2018.384sentences"}:
+        return GLMBenchmark("pereira2018", experiment="384sentences")
     raise ValueError(f"Unknown benchmark id '{identifier}'.")

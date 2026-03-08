@@ -1,5 +1,5 @@
-from .hf import HFLLMSubject
-from .objective_features import ObjectiveFeatureSubject
-from convminds.brainscore.artificial_subject import ArtificialSubject
+from .base import ArtificialSubject, Subject
+from .hf import HFArtificialSubject
+from .human import HumanSubject
 
-__all__ = ["ArtificialSubject", "HFLLMSubject", "ObjectiveFeatureSubject"]
+__all__ = ["Subject", "ArtificialSubject", "HumanSubject", "HFArtificialSubject"]

@@ -1,3 +1,6 @@
-from .pereira import PereiraSentencesBenchmark, get_benchmark_by_id
+from convminds.interfaces import Benchmark
 
-__all__ = ["PereiraSentencesBenchmark", "get_benchmark_by_id"]
+from .base import InMemoryBenchmark
+from .glm import GLMBenchmark
+
+__all__ = ["Benchmark", "GLMBenchmark", "InMemoryBenchmark"]
