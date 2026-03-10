@@ -1,5 +1,3 @@
-# Convergent Minds
-
 ![Convergent Minds Logo](logo.png)
 
 **Convergent Minds** (`convminds`) is a PyTorch-native framework for aligning biological brain activity with Large Language Models (LLMs). It provides standardized neuro-components, leakage-safe data flows, and end-to-end recipes to replicate state-of-the-art research in brain-to-text decoding.
