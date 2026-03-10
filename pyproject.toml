@@ -4,7 +4,7 @@
 
 [project]
 name = "convminds"
-version = "2.1.0"
+version = "0.1.0"
 description = ""
 authors = [
     { name = "Jacopo Minniti", email = "jacopo.minniti004@gmail.com" }
