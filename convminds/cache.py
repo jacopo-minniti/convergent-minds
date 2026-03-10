@@ -6,7 +6,7 @@ import os
 import pickle
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 
 def convminds_home() -> Path:
@@ -82,45 +82,3 @@ def save_cache(namespace: str, config: dict[str, Any], payload: Any, suffix: str
     write_json(meta_path, {"config": _normalize(config), "payload_path": str(payload_path)})
     return payload_path
 
-
-def save_score_summary(config: dict[str, Any], summary: dict[str, Any], diagnostics: dict[str, Any] | None = None) -> Path:
-    score_dir = ensure_cache_dir("scores")
-    cache_id = config_hash(config)
-    summary_path = score_dir / f"{cache_id}.json"
-    write_json(summary_path, {"config": _normalize(config), "summary": _normalize(summary)})
-    if diagnostics is not None:
-        diagnostics_path = score_dir / f"{cache_id}.pkl"
-        write_pickle(diagnostics_path, diagnostics)
-    return summary_path
-
-
-def _iter_score_manifests() -> Iterable[dict[str, Any]]:
-    score_dir = ensure_cache_dir("scores")
-    for path in sorted(score_dir.glob("*.json")):
-        yield read_json(path)
-
-
-def display_score(**filters: Any) -> dict[str, Any] | None:
-    filters = {key: value for key, value in filters.items() if value is not None}
-    matches = []
-    for manifest in _iter_score_manifests():
-        config = manifest.get("config", {})
-        if all(config.get(key) == value for key, value in filters.items()):
-            matches.append(manifest)
-
-    if not matches:
-        print("No cached score matches the provided filters.")
-        return None
-
-    if len(matches) > 1:
-        print(f"Found {len(matches)} cached scores. Showing the most recent manifest order match.")
-
-    selected = matches[-1]
-    summary = selected.get("summary", {})
-    config = selected.get("config", {})
-    print("Cached score")
-    for key in sorted(config):
-        print(f"  {key}: {config[key]}")
-    for key in sorted(summary):
-        print(f"  {key}: {summary[key]}")
-    return selected

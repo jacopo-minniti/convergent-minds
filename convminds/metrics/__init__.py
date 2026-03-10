@@ -1,3 +1,3 @@
-from .r2 import DecoderScore, linear_r2
+from . import latents, spatial, text
 
-__all__ = ["DecoderScore", "linear_r2"]
+__all__ = ["latents", "spatial", "text"]

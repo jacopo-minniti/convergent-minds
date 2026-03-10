@@ -5,26 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 
-class Dataset(ABC):
-    """Legacy data source abstraction kept for internal compatibility."""
-
-    identifier: str
-
-    @abstractmethod
-    def load(self) -> Any:
-        raise NotImplementedError
-
-
-class Metric(ABC):
-    """Legacy metric abstraction kept for internal compatibility."""
-
-    identifier: str
-
-    @abstractmethod
-    def __call__(self, prediction: Any, target: Any) -> Any:
-        raise NotImplementedError
-
-
 @dataclass(frozen=True)
 class StimulusRecord:
     stimulus_id: str

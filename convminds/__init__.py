@@ -1,18 +1,42 @@
-from . import metrics, pipelines
-from .benchmarks import Benchmark, GLMBenchmark, InMemoryBenchmark
-from .cache import display_score
-from .decoders import Decoder, LinearDecoder
+from . import metrics
+from .benchmarks import Benchmark, InMemoryBenchmark
 from .subjects import HFArtificialSubject, HumanSubject
+
+_LAZY_SUBMODULES = {
+    "benchmarks",
+    "subjects",
+    "data",
+    "transforms",
+    "nn",
+    "models",
+    "trainers",
+    "objectives",
+    "recipes",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_SUBMODULES:
+        import importlib
+
+        module = importlib.import_module(f"{__name__}.{name}")
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "metrics",
-    "pipelines",
     "Benchmark",
-    "GLMBenchmark",
     "InMemoryBenchmark",
     "HumanSubject",
     "HFArtificialSubject",
-    "Decoder",
-    "LinearDecoder",
-    "display_score",
+    "data",
+    "transforms",
+    "nn",
+    "models",
+    "trainers",
+    "objectives",
+    "recipes",
+    "benchmarks",
+    "subjects",
 ]
