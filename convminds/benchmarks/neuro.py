@@ -540,48 +540,58 @@ class PereiraBenchmark(NeuroBenchmark):
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Handle archived data from OSF
-        zip_files = list(raw_dir.rglob("*.zip"))
-        if zip_files:
+        # 1. Recursive extraction loop (handles nested zips)
+        extracted_something = True
+        while extracted_something:
+            extracted_something = False
+            zip_files = list(raw_dir.rglob("*.zip"))
             import zipfile
             for zip_path in zip_files:
-                # Lazy extraction: skip if a folder with the same name already exists
-                # to avoid re-extracting and potentially hitting corrupted nested files
                 target_dir = zip_path.parent / zip_path.stem
-                if target_dir.exists() and any(target_dir.iterdir()):
-                    continue
-                
-                try:
-                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                        # Extract to the directory containing the zip
-                        zip_ref.extractall(zip_path.parent)
-                except (zipfile.BadZipFile, PermissionError, OSError):
-                    # Skip corrupted or locked files instead of crashing
-                    continue
+                if not (target_dir.exists() and any(target_dir.iterdir())):
+                    try:
+                        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                            zip_ref.extractall(zip_path.parent)
+                            extracted_something = True
+                    except (zipfile.BadZipFile, PermissionError, OSError):
+                        continue
 
+        # 2. Resolve manifest (favor root files)
         manifest_path = _resolve_manifest_path(raw_dir, manifest_path)
         df, id_col, text_col, beta_col = _read_manifest(manifest_path)
 
-        # Pre-scan for all NIfTI files in case the manifest doesn't have paths
-        nifti_map = {p.stem: p for p in raw_dir.rglob("*.nii*")}
+        # 3. Comprehensive Brain Data Scan
+        nifti_files = sorted(list(raw_dir.rglob("*.nii*")))
+        print(f"Detected {len(nifti_files)} NIfTI data files in {raw_dir}")
+        nifti_map = {p.stem: p for p in nifti_files}
 
         vectors: list[np.ndarray] = []
         metadata: list[tuple[str, str]] = []
-        for _, row in df.iterrows():
+        
+        for index, row in df.iterrows():
             stimulus_id = str(row[id_col])
             text = str(row[text_col])
             
-            # Resolve beta path: from manifest or by matching stimulus_id to filenames
+            # Resolve beta path
+            beta_path = None
             if beta_col and row[beta_col] and str(row[beta_col]) != "None":
                 beta_path = raw_dir / str(row[beta_col])
-            else:
-                # Try to find a NIfTI file that matches the ID
-                beta_path = nifti_map.get(stimulus_id) or nifti_map.get(text[:30])
+            
+            if not beta_path or not beta_path.exists():
+                # Matching Strategy: stem match, text match, or index match
+                beta_path = (
+                    nifti_map.get(stimulus_id) 
+                    or nifti_map.get(text[:30])
+                    or (nifti_files[index] if index < len(nifti_files) else None)
+                )
             
             if not beta_path or not beta_path.exists():
                 continue
 
-            matrix, _ = flatten_nifti(beta_path)
+            try:
+                matrix, _ = flatten_nifti(beta_path)
+            except Exception:
+                continue
             vector = matrix.mean(axis=0)
             vectors.append(vector)
             metadata.append((stimulus_id, text))
