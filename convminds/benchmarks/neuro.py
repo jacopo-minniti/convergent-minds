@@ -704,27 +704,30 @@ def _read_manifest(path: Path) -> tuple["pd.DataFrame", str, str, str]:
     except ModuleNotFoundError as error:
         raise RuntimeError("pandas is required to read the Pereira manifest file.") from error
 
-    if path.suffix in [".tsv", ".txt"]:
-        sep = "\t"
-    else:
-        sep = ","
+    sep = "\t" if path.suffix in [".tsv", ".txt"] else ","
+    encoding = "utf-8"
     
     print(f"Attempting to read manifest: {path}")
     try:
-        df = pd.read_csv(path, sep=sep, encoding="utf-8")
+        df = pd.read_csv(path, sep=sep, encoding=encoding)
     except UnicodeDecodeError:
-        df = pd.read_csv(path, sep=sep, encoding="latin-1")
+        encoding = "latin-1"
+        df = pd.read_csv(path, sep=sep, encoding=encoding)
+
     # If the default separator failed to produce multiple columns, try whitespace
     if len(df.columns) < 2:
-        df = pd.read_csv(path, sep=r"\s+", engine="python")
+        try:
+            df = pd.read_csv(path, sep=r"\s+", engine="python", encoding=encoding)
+        except Exception:
+            pass
     
     # Heuristic: Check if we have any matching headers. If not, assume first row is data.
-    all_targets = ["id", "sentence", "text", "beta", "path"]
+    all_targets = ["id", "sentence", "text", "beta", "path", "content"]
     has_headers = any(any(t in str(col).lower() for t in all_targets) for col in df.columns)
     
     if not has_headers:
-        # Re-read without headers
-        df = pd.read_csv(path, sep=sep, header=None)
+        # Re-read without headers using the same successful encoding
+        df = pd.read_csv(path, sep=sep, header=None, encoding=encoding)
         if len(df.columns) >= 3:
             df.columns = ["id", "text", "beta_path"] + [f"extra_{i}" for i in range(len(df.columns)-3)]
         elif len(df.columns) == 2:
