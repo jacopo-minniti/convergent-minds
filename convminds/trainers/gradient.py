@@ -26,6 +26,7 @@ class GradientTrainer:
         self.model.train()
         for _ in range(epochs):
             for batch in dataloader:
+                self.optimizer.zero_grad(set_to_none=True)
                 loss = self._step(batch, target_key=target_key)
                 if loss is None:
                     continue
@@ -33,7 +34,6 @@ class GradientTrainer:
                 if self.max_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
-                self.optimizer.zero_grad(set_to_none=True)
 
     def _step(self, batch, *, target_key: str | None = None):
         batch = self._move_to_device(batch)
@@ -61,6 +61,11 @@ class GradientTrainer:
     def _move_to_device(self, batch):
         if torch.is_tensor(batch):
             return batch.to(self.device)
+        if hasattr(batch, "to") and callable(getattr(batch, "to")):
+            try:
+                return batch.to(self.device)
+            except Exception:
+                pass
         if isinstance(batch, dict):
             return {k: self._move_to_device(v) for k, v in batch.items()}
         if isinstance(batch, (list, tuple)):

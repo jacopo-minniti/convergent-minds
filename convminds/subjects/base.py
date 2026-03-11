@@ -8,7 +8,7 @@ from convminds.interfaces import RecordedSplit
 
 class Subject(ABC):
     def __init__(self) -> None:
-        self.neurons: list[dict[str, Any]] | None = None
+        self.recordings: list[dict[str, Any]] | None = None
         self.recorded_splits: list[RecordedSplit] | None = None
         self.split_stimuli: list[dict[str, Any]] | None = None
         self.feature_ids: list[str] | None = None
@@ -23,7 +23,7 @@ class Subject(ABC):
         raise NotImplementedError
 
     def reset_recordings(self) -> None:
-        self.neurons = None
+        self.recordings = None
         self.recorded_splits = None
         self.split_stimuli = None
         self.feature_ids = None
@@ -37,7 +37,7 @@ class Subject(ABC):
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self.recorded_splits = recorded_splits
-        self.neurons = [{"train": split.train, "test": split.test} for split in recorded_splits]
+        self.recordings = [{"train": split.train, "test": split.test} for split in recorded_splits]
         self.split_stimuli = [{"train": split.train_stimuli, "test": split.test_stimuli} for split in recorded_splits]
         self.feature_ids = list(feature_ids) if feature_ids is not None else None
         self.recording_metadata = dict(metadata or {})

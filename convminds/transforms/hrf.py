@@ -15,17 +15,34 @@ class HRFWindow(StatelessTransform):
 
     def __call__(self, brain: BrainTensor) -> BrainTensor:
         signal = brain.signal
-        if signal.size(1) < self.t:
+        is_2d = signal.dim() == 2
+        t_dim = 0 if is_2d else 1
+        v_dim = 1 if is_2d else 2
+
+        if signal.size(t_dim) < self.t:
             if not self.pad:
                 raise ValueError("HRFWindow received fewer timepoints than the window size.")
-            pad_len = self.t - signal.size(1)
-            padding = torch.zeros(
-                signal.size(0),
-                pad_len,
-                signal.size(2),
-                device=signal.device,
-                dtype=signal.dtype,
-            )
-            signal = torch.cat([padding, signal], dim=1)
-        window = signal[:, -self.t :, :]
-        return BrainTensor(signal=window, coords=brain.coords, rois=brain.rois)
+            pad_len = self.t - signal.size(t_dim)
+            if is_2d:
+                padding = torch.zeros(
+                    pad_len,
+                    signal.size(v_dim),
+                    device=signal.device,
+                    dtype=signal.dtype,
+                )
+            else:
+                padding = torch.zeros(
+                    signal.size(0),
+                    pad_len,
+                    signal.size(v_dim),
+                    device=signal.device,
+                    dtype=signal.dtype,
+                )
+            signal = torch.cat([padding, signal], dim=t_dim)
+            
+        if is_2d:
+            window = signal[-self.t :, :]
+        else:
+            window = signal[:, -self.t :, :]
+
+        return BrainTensor(signal=window, coords=brain.coords, rois=brain.rois, padding_mask=brain.padding_mask)

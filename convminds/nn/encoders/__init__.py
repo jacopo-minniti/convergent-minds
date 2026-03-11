@@ -1,3 +1,3 @@
-from .spatial import SpatialAttention, SpatialAttentionEncoder
+from .spatial import SpatialAttentionEncoder
 
-__all__ = ["SpatialAttention", "SpatialAttentionEncoder"]
+__all__ = ["SpatialAttentionEncoder"]

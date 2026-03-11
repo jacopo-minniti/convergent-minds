@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from convminds.models.base import BrainLanguageModel
-from convminds.nn.encoders import SpatialAttention
+from convminds.nn.encoders import SpatialAttentionEncoder
 from convminds.nn.fusion import CrossAttentionFusion
 from convminds.nn.wrappers import ResidualInjector
 
@@ -11,7 +11,7 @@ from convminds.nn.wrappers import ResidualInjector
 class DeepSteeredLM(BrainLanguageModel):
     def __init__(self, llm_id: str, encoder_out_dim: int, injection_layer: int, num_queries: int = 128):
         super().__init__()
-        self.encoder = SpatialAttention(num_queries=num_queries, query_dim=encoder_out_dim, use_coords=True)
+        self.encoder = SpatialAttentionEncoder(num_queries=num_queries, query_dim=encoder_out_dim, use_coords=True)
         self.cross_attn = CrossAttentionFusion(embed_dim=encoder_out_dim)
 
         from transformers import AutoModelForCausalLM

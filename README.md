@@ -51,7 +51,7 @@ datamodule = cm.data.BrainDataModule(
     human_subject=human,
     artificial_subject=oracle,
     stateless_transforms=[T.HRFWindow(t=1)],
-    stateful_transforms=[T.ZScore(dim="time")],
+    stateful_transforms=[T.ZScore(dim="batch")],
     batch_size=32,
 )
 datamodule.setup() # Safely fits stateful transforms on train split
@@ -66,7 +66,7 @@ import convminds.nn as cnn
 from convminds.models import PromptConditionedLM
 
 # Mix and match SOTA components
-encoder = cnn.encoders.SpatialAttention(query_dim=4096, use_coords=True) # From MindLLM
+encoder = cnn.encoders.SpatialAttentionEncoder(query_dim=4096, use_coords=True) # From MindLLM
 fusion = cnn.fusion.PrefixFusion() # Standard prefix tuning
 
 # Assemble into a model

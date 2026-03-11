@@ -6,7 +6,7 @@ import torch.nn as nn
 from convminds.data.primitives import BrainTensor
 
 
-class SpatialAttention(nn.Module):
+class SpatialAttentionEncoder(nn.Module):
     """Encodes fMRI signals using spatial coordinate cross-attention."""
 
     def __init__(self, num_queries: int = 128, query_dim: int = 4096, use_coords: bool = True):
@@ -48,5 +48,3 @@ class SpatialAttention(nn.Module):
         return latents
 
 
-class SpatialAttentionEncoder(SpatialAttention):
-    pass

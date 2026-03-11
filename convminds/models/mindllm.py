@@ -10,7 +10,7 @@ class SpatialPrefixLM(PromptConditionedLM):
     """
 
     def __init__(self, llm_id: str = "lmsys/vicuna-7b-v1.5", num_queries: int = 128, llm_dim: int = 4096):
-        encoder = cnn.encoders.SpatialAttention(
+        encoder = cnn.encoders.SpatialAttentionEncoder(
             num_queries=num_queries,
             query_dim=llm_dim,
             use_coords=True,

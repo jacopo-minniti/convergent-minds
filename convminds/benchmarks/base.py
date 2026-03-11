@@ -31,18 +31,23 @@ class BaseBenchmark(Benchmark):
         stimuli: StimulusSet,
         split_config: SplitConfig,
         human_recording_source: HumanRecordingSource,
+        description: str | None = None,
     ) -> None:
         self.identifier = identifier
         self.stimuli = stimuli
         self.split_config = split_config
         self.human_recording_source = human_recording_source
+        self.description = description or ""
 
     def benchmark_config(self) -> dict[str, Any]:
-        return {
+        config = {
             "identifier": self.identifier,
             "split_config": self.split_config.to_dict(),
             "human_recording_source": self.human_recording_source.describe(),
         }
+        if self.description:
+            config["description"] = self.description
+        return config
 
     def build_split_plan(self) -> list[SplitPlan]:
         config = {"kind": "split-plan", "benchmark": self.benchmark_config()}
