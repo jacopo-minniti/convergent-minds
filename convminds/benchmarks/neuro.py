@@ -534,6 +534,15 @@ class PereiraBenchmark(NeuroBenchmark):
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Handle archived data from OSF
+        zip_files = list(raw_dir.rglob("*.zip"))
+        if zip_files:
+            import zipfile
+            for zip_path in zip_files:
+                with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                    # Extract to the raw_dir directly
+                    zip_ref.extractall(raw_dir)
+
         manifest_path = _resolve_manifest_path(raw_dir, manifest_path)
         df, id_col, text_col, beta_col = _read_manifest(manifest_path)
 
@@ -635,17 +644,31 @@ def _match_events_path(bold_path: Path) -> Path | None:
 def _resolve_manifest_path(raw_dir: Path, manifest_path: str | Path | None) -> Path:
     if manifest_path is not None:
         return Path(manifest_path).expanduser()
-    candidates = [
-        raw_dir / "manifest.tsv",
-        raw_dir / "stimuli.tsv",
-        raw_dir / "metadata.tsv",
-        raw_dir / "manifest.csv",
-        raw_dir / "stimuli.csv",
-        raw_dir / "metadata.csv",
+
+    # Common locations and names for neuro-benchmark manifests
+    search_dirs = [raw_dir, raw_dir / "osfstorage"]
+    names = [
+        "manifest.tsv", "stimuli.tsv", "metadata.tsv",
+        "manifest.csv", "stimuli.csv", "metadata.csv",
+        "stimuli_metadata.csv", "stimuli_metadata.tsv",
+        "pereira_stimuli.csv", "sentences.csv"
     ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
+
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        for name in names:
+            path = d / name
+            if path.exists():
+                return path
+
+    # Robust fallback: Deep search for anything matching manifest keywords
+    for ext in ["*.csv", "*.tsv"]:
+        for path in raw_dir.rglob(ext):
+            lowered = path.name.lower()
+            if any(kw in lowered for kw in ["manifest", "stimuli", "metadata", "sentence"]):
+                return path
+
     raise FileNotFoundError(
         "Could not locate a manifest file. Provide manifest_path with columns for "
         "stimulus id, text, and beta_path."
