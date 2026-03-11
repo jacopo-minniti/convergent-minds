@@ -539,9 +539,19 @@ class PereiraBenchmark(NeuroBenchmark):
         if zip_files:
             import zipfile
             for zip_path in zip_files:
-                with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                    # Extract to the raw_dir directly
-                    zip_ref.extractall(raw_dir)
+                # Lazy extraction: skip if a folder with the same name already exists
+                # to avoid re-extracting and potentially hitting corrupted nested files
+                target_dir = zip_path.parent / zip_path.stem
+                if target_dir.exists() and any(target_dir.iterdir()):
+                    continue
+                
+                try:
+                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                        # Extract to the directory containing the zip
+                        zip_ref.extractall(zip_path.parent)
+                except (zipfile.BadZipFile, PermissionError, OSError):
+                    # Skip corrupted or locked files instead of crashing
+                    continue
 
         manifest_path = _resolve_manifest_path(raw_dir, manifest_path)
         df, id_col, text_col, beta_col = _read_manifest(manifest_path)
