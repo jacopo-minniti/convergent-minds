@@ -559,6 +559,7 @@ class PereiraBenchmark(NeuroBenchmark):
                     # Skip corrupted or locked files instead of crashing
                     continue
 
+        manifest_path = _resolve_manifest_path(raw_dir, manifest_path)
         df, id_col, text_col, beta_col = _read_manifest(manifest_path)
 
         # Pre-scan for all NIfTI files in case the manifest doesn't have paths
