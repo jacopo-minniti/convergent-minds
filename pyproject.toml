@@ -14,15 +14,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 
 dependencies = [
-    "awscli",
-    "nibabel",
+    "torch>=1.9.1",
     "numpy>=1.21",
     "osfclient",
-    "pandas",
     "pytest",
     "scikit-learn",
-    "torch>=1.9.1",
     "transformers>=4.11.3",
+    "datasets"
 ]
 
 [build-system]
