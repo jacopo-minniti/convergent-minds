@@ -487,8 +487,14 @@ class PereiraBenchmark(NeuroBenchmark):
         def _ensure():
             if processed_path.exists():
                 return
-            raw_dir.mkdir(parents=True, exist_ok=True)
-            download_osf(spec.dataset_id, raw_dir)
+            
+            # If the raw directory already has plenty of files, skip the slow OSF check
+            if raw_dir.exists() and len(list(raw_dir.rglob("*"))) > 5:
+                pass
+            else:
+                raw_dir.mkdir(parents=True, exist_ok=True)
+                download_osf(spec.dataset_id, raw_dir)
+            
             PereiraBenchmark.prepare_processed(
                 raw_dir,
                 output_path=processed_path,
@@ -702,7 +708,12 @@ def _read_manifest(path: Path) -> tuple["pd.DataFrame", str, str, str]:
         sep = "\t"
     else:
         sep = ","
-    df = pd.read_csv(path, sep=sep)
+    
+    print(f"Attempting to read manifest: {path}")
+    try:
+        df = pd.read_csv(path, sep=sep, encoding="utf-8")
+    except UnicodeDecodeError:
+        df = pd.read_csv(path, sep=sep, encoding="latin-1")
     # If the default separator failed to produce multiple columns, try whitespace
     if len(df.columns) < 2:
         df = pd.read_csv(path, sep=r"\s+", engine="python")
