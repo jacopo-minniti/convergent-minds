@@ -76,3 +76,17 @@ def test_deep_steered_lm_forward(monkeypatch):
     input_ids = torch.randint(0, 10, (2, 3))
     output = model(brain, text_input_ids=input_ids)
     assert output.logits.shape == (2, 3, 11)
+
+
+def test_residual_steer_lm_forward(monkeypatch):
+    _patch_transformers(monkeypatch)
+    model = cm.models.ResidualSteerLM(llm_id="gpt2", encoder_in_dim=10, injection_layer=0, num_frames=4)
+    
+    brain_tensor = torch.randn(2, 4, 10)
+    input_ids = torch.randint(0, 10, (2, 3))
+    output = model(brain_tensor, text_input_ids=input_ids)
+    assert output.logits.shape == (2, 3, 11)
+    
+    # Check if injector recorded penalty
+    penalty = model.get_penalty()
+    assert penalty is not None

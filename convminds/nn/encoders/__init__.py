@@ -1,3 +1,4 @@
 from .spatial import SpatialAttentionEncoder
+from .temporal import TemporalEncoder
 
-__all__ = ["SpatialAttentionEncoder"]
+__all__ = ["SpatialAttentionEncoder", "TemporalEncoder"]

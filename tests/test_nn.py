@@ -4,9 +4,9 @@ import torch
 import torch.nn as nn
 
 from convminds.data.primitives import BrainTensor
-from convminds.nn.encoders import SpatialAttentionEncoder
-from convminds.nn.fusion import PrefixFusion
-from convminds.nn.wrappers import ResidualInjector
+from convminds.nn.encoders import SpatialAttentionEncoder, TemporalEncoder
+from convminds.nn.fusion import PrefixFusion, CrossAttentionFusion
+from convminds.nn.wrappers import ResidualInjector, SteerInjector
 
 
 def test_spatial_attention_shapes():
@@ -46,3 +46,39 @@ def test_residual_injector_forward():
     brain_context = torch.zeros(2, 2, 4)
     out = injector(hidden, brain_context=brain_context)
     assert torch.allclose(out, hidden + 1.0)
+
+
+def test_temporal_encoder_shapes():
+    # (batch, num_frames, input_dim)
+    brain_tensor = torch.randn(2, 4, 10)
+    encoder = TemporalEncoder(input_dim=10, embed_dim=16, num_frames=4)
+    out = encoder(brain_tensor)
+    assert out.shape == (2, 4, 16)
+
+
+def test_cross_attention_fusion_shapes():
+    fusion = CrossAttentionFusion(embed_dim=16)
+    hidden = torch.randn(2, 5, 16)
+    brain_context = torch.randn(2, 4, 16)
+    out = fusion(hidden, brain_context)
+    assert out.shape == (2, 5, 16)
+
+
+def test_steer_injector_penalty():
+    class DummyLayer(nn.Module):
+        def forward(self, x, **kwargs):
+            return x
+
+    class DummyMove(nn.Module):
+        def forward(self, x, context):
+            return torch.ones_like(x) * 2.0
+
+    injector = SteerInjector(DummyLayer(), DummyMove())
+    hidden = torch.zeros(1, 1, 4)
+    brain = torch.zeros(1, 1, 4)
+    
+    out = injector(hidden, brain_context=brain)
+    # Norm squared of [2, 2, 2, 2] is 4*2^2 = 16
+    assert injector.last_penalty is not None
+    assert torch.allclose(injector.last_penalty, torch.tensor([16.0]))
+    assert torch.allclose(out, torch.ones_like(hidden) * 2.0)
