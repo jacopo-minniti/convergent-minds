@@ -663,7 +663,7 @@ def _resolve_manifest_path(raw_dir: Path, manifest_path: str | Path | None) -> P
                 return path
 
     # Robust fallback: Deep search for anything matching manifest keywords
-    for ext in ["*.csv", "*.tsv"]:
+    for ext in ["*.csv", "*.tsv", "*.txt"]:
         for path in raw_dir.rglob(ext):
             lowered = path.name.lower()
             if any(kw in lowered for kw in ["manifest", "stimuli", "metadata", "sentence"]):
@@ -681,8 +681,14 @@ def _read_manifest(path: Path) -> tuple["pd.DataFrame", str, str, str]:
     except ModuleNotFoundError as error:
         raise RuntimeError("pandas is required to read the Pereira manifest file.") from error
 
-    sep = "\t" if path.suffix == ".tsv" else ","
+    if path.suffix in [".tsv", ".txt"]:
+        sep = "\t"
+    else:
+        sep = ","
     df = pd.read_csv(path, sep=sep)
+    # If the default separator failed to produce multiple columns, try whitespace
+    if len(df.columns) < 2:
+        df = pd.read_csv(path, sep=r"\s+", engine="python")
 
     id_col = _pick_column(df, ["stimulus_id", "sentence_id", "item_id", "id"])
     text_col = _pick_column(df, ["text", "sentence", "stimulus", "prompt"])
