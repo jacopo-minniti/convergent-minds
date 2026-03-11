@@ -708,8 +708,12 @@ def _read_manifest(path: Path) -> tuple["pd.DataFrame", str, str, str]:
             df.columns = ["id", "text", "beta_path"] + [f"extra_{i}" for i in range(len(df.columns)-3)]
         elif len(df.columns) == 2:
             df.columns = ["id", "text"]
-        else:
+        elif len(df.columns) == 1:
+            # Special case: it's just a text file with one sentence per line
             df.columns = ["text"]
+            df["id"] = range(len(df)) # Auto-generate IDs
+            # If there's no path column, the prepare_processed() logic might need 
+            # to assume the beta maps follow the same order in the directory.
 
     id_col = _pick_column(df, ["stimulus_id", "sentence_id", "item_id", "id", "index"])
     text_col = _pick_column(df, ["text", "sentence", "stimulus", "prompt", "content"])
@@ -730,12 +734,12 @@ def _pick_column(df: "pd.DataFrame", candidates: Sequence[str]) -> str:
             return lower_columns[candidate.lower()]
 
     # If all else fails, and there are few columns, guess by position if names don't match
-    if len(df.columns) == 3:
-        # Assuming order: ID, Text, Path
-        mapping = {"id": df.columns[0], "text": df.columns[1], "beta": df.columns[2]}
-        # Determine which candidate list we are checking
-        if "stimulus_id" in candidates: return df.columns[0]
-        if "text" in candidates: return df.columns[1]
-        if "beta_path" in candidates: return df.columns[2]
+    if len(df.columns) <= 3:
+        if "stimulus_id" in candidates:
+            return df.columns[0] if len(df.columns) > 1 else df.columns[0] # Just take first as ID/Text fallback
+        if "text" in candidates:
+            return df.columns[1] if len(df.columns) > 1 else df.columns[0]
+        if "beta_path" in candidates:
+            return df.columns[2] if len(df.columns) > 2 else df.columns[-1]
 
     raise ValueError(f"None of the candidate columns {candidates} found in manifest. Available columns: {list(df.columns)}")
