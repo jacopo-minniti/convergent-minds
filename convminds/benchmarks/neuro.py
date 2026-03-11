@@ -662,11 +662,18 @@ def _resolve_manifest_path(raw_dir: Path, manifest_path: str | Path | None) -> P
             if path.exists():
                 return path
 
-    # Robust fallback: Deep search for anything matching manifest keywords
+    # Priority 1: Files actually named 'manifest' or 'metadata'
     for ext in ["*.csv", "*.tsv", "*.txt"]:
         for path in raw_dir.rglob(ext):
             lowered = path.name.lower()
-            if any(kw in lowered for kw in ["manifest", "stimuli", "metadata", "sentence"]):
+            if any(kw in lowered for kw in ["manifest", "metadata"]):
+                return path
+
+    # Priority 2: Stimuli or sentence files
+    for ext in ["*.csv", "*.tsv", "*.txt"]:
+        for path in raw_dir.rglob(ext):
+            lowered = path.name.lower()
+            if any(kw in lowered for kw in ["stimuli", "sentence"]):
                 return path
 
     raise FileNotFoundError(
@@ -689,15 +696,46 @@ def _read_manifest(path: Path) -> tuple["pd.DataFrame", str, str, str]:
     # If the default separator failed to produce multiple columns, try whitespace
     if len(df.columns) < 2:
         df = pd.read_csv(path, sep=r"\s+", engine="python")
+    
+    # Heuristic: Check if we have any matching headers. If not, assume first row is data.
+    all_targets = ["id", "sentence", "text", "beta", "path"]
+    has_headers = any(any(t in str(col).lower() for t in all_targets) for col in df.columns)
+    
+    if not has_headers:
+        # Re-read without headers
+        df = pd.read_csv(path, sep=sep, header=None)
+        if len(df.columns) >= 3:
+            df.columns = ["id", "text", "beta_path"] + [f"extra_{i}" for i in range(len(df.columns)-3)]
+        elif len(df.columns) == 2:
+            df.columns = ["id", "text"]
+        else:
+            df.columns = ["text"]
 
-    id_col = _pick_column(df, ["stimulus_id", "sentence_id", "item_id", "id"])
-    text_col = _pick_column(df, ["text", "sentence", "stimulus", "prompt"])
-    beta_col = _pick_column(df, ["beta_path", "path", "file", "image", "beta"])
+    id_col = _pick_column(df, ["stimulus_id", "sentence_id", "item_id", "id", "index"])
+    text_col = _pick_column(df, ["text", "sentence", "stimulus", "prompt", "content"])
+    beta_col = _pick_column(df, ["beta_path", "path", "file", "image", "beta", "filename"])
     return df, id_col, text_col, beta_col
 
 
 def _pick_column(df: "pd.DataFrame", candidates: Sequence[str]) -> str:
+    # Exact match
     for candidate in candidates:
         if candidate in df.columns:
             return candidate
-    raise ValueError(f"None of the candidate columns {candidates} found in manifest.")
+    
+    # CASE INSENSITIVE MATCH
+    lower_columns = {c.lower(): c for c in df.columns}
+    for candidate in candidates:
+        if candidate.lower() in lower_columns:
+            return lower_columns[candidate.lower()]
+
+    # If all else fails, and there are few columns, guess by position if names don't match
+    if len(df.columns) == 3:
+        # Assuming order: ID, Text, Path
+        mapping = {"id": df.columns[0], "text": df.columns[1], "beta": df.columns[2]}
+        # Determine which candidate list we are checking
+        if "stimulus_id" in candidates: return df.columns[0]
+        if "text" in candidates: return df.columns[1]
+        if "beta_path" in candidates: return df.columns[2]
+
+    raise ValueError(f"None of the candidate columns {candidates} found in manifest. Available columns: {list(df.columns)}")
