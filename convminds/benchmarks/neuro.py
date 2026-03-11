@@ -559,15 +559,27 @@ class PereiraBenchmark(NeuroBenchmark):
                     # Skip corrupted or locked files instead of crashing
                     continue
 
-        manifest_path = _resolve_manifest_path(raw_dir, manifest_path)
         df, id_col, text_col, beta_col = _read_manifest(manifest_path)
+
+        # Pre-scan for all NIfTI files in case the manifest doesn't have paths
+        nifti_map = {p.stem: p for p in raw_dir.rglob("*.nii*")}
 
         vectors: list[np.ndarray] = []
         metadata: list[tuple[str, str]] = []
         for _, row in df.iterrows():
             stimulus_id = str(row[id_col])
             text = str(row[text_col])
-            beta_path = raw_dir / str(row[beta_col])
+            
+            # Resolve beta path: from manifest or by matching stimulus_id to filenames
+            if beta_col and row[beta_col] and str(row[beta_col]) != "None":
+                beta_path = raw_dir / str(row[beta_col])
+            else:
+                # Try to find a NIfTI file that matches the ID
+                beta_path = nifti_map.get(stimulus_id) or nifti_map.get(text[:30])
+            
+            if not beta_path or not beta_path.exists():
+                continue
+
             matrix, _ = flatten_nifti(beta_path)
             vector = matrix.mean(axis=0)
             vectors.append(vector)
@@ -728,16 +740,33 @@ def _read_manifest(path: Path) -> tuple["pd.DataFrame", str, str, str]:
     if not has_headers:
         # Re-read without headers using the same successful encoding
         df = pd.read_csv(path, sep=sep, header=None, encoding=encoding)
-        if len(df.columns) >= 3:
+        
+        # Heuristic: if many columns look like sentences, it's a multi-sentence stimulus file
+        sentence_cols = []
+        for col in df.columns:
+            # If average length is long and has spaces, it's likely text
+            sample = df[col].dropna().head(5).astype(str)
+            if sample.str.contains(" ").mean() > 0.5:
+                sentence_cols.append(col)
+        
+        if len(sentence_cols) > 1:
+            # Flatten multi-column sentences into a single 'text' column with auto IDs
+            rows = []
+            for _, row in df.iterrows():
+                for col in sentence_cols:
+                    txt = str(row[col]).strip()
+                    if txt and len(txt) > 5:
+                        rows.append({"text": txt})
+            df = pd.DataFrame(rows)
+            df["id"] = range(len(df))
+            df["beta_path"] = None 
+        elif len(df.columns) >= 3:
             df.columns = ["id", "text", "beta_path"] + [f"extra_{i}" for i in range(len(df.columns)-3)]
         elif len(df.columns) == 2:
             df.columns = ["id", "text"]
         elif len(df.columns) == 1:
-            # Special case: it's just a text file with one sentence per line
             df.columns = ["text"]
-            df["id"] = range(len(df)) # Auto-generate IDs
-            # If there's no path column, the prepare_processed() logic might need 
-            # to assume the beta maps follow the same order in the directory.
+            df["id"] = range(len(df))
 
     id_col = _pick_column(df, ["stimulus_id", "sentence_id", "item_id", "id", "index"])
     text_col = _pick_column(df, ["text", "sentence", "stimulus", "prompt", "content"])
@@ -760,10 +789,16 @@ def _pick_column(df: "pd.DataFrame", candidates: Sequence[str]) -> str:
     # If all else fails, and there are few columns, guess by position if names don't match
     if len(df.columns) <= 3:
         if "stimulus_id" in candidates:
-            return df.columns[0] if len(df.columns) > 1 else df.columns[0] # Just take first as ID/Text fallback
+            return df.columns[0]
         if "text" in candidates:
             return df.columns[1] if len(df.columns) > 1 else df.columns[0]
         if "beta_path" in candidates:
-            return df.columns[2] if len(df.columns) > 2 else df.columns[-1]
+            # Only guess the 3rd column as a path if it looks like one (no spaces, common extensions)
+            if len(df.columns) > 2:
+                val = str(df.iloc[0, 2]).lower()
+                if " " not in val and any(ext in val for ext in [".nii", ".gz", ".mat", ".img"]):
+                    return df.columns[2]
+            return None # Don't guess a path if it doesn't look like one
 
+    if "beta_path" in candidates: return None # Explicitly return None if no path found
     raise ValueError(f"None of the candidate columns {candidates} found in manifest. Available columns: {list(df.columns)}")
