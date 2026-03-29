@@ -136,9 +136,10 @@ class HFArtificialSubject(ArtificialSubject):
                 self._load_cache_payload(cached)
                 return self
 
+        from tqdm import tqdm
         all_values = []
         all_stimulus_ids = []
-        for indices in benchmark.iter_context_groups():
+        for indices in tqdm(benchmark.iter_context_groups(), desc=f"Recording activations ({self.model_id})", leave=False):
             texts = [benchmark.stimuli[index].text for index in indices]
             values = self._extract_group_activations(texts)
             for local_index, global_index in enumerate(indices):

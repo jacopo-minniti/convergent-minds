@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
 
 import torch
+from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset, random_split
 from torch.utils.data._utils.collate import default_collate
 
@@ -245,7 +246,7 @@ class BrainDataModule:
             collate_fn=_collate,
         )
         brains: List[BrainTensor] = []
-        for batch in loader:
+        for batch in tqdm(loader, desc="Stacking dataset", leave=False):
             brain = _ensure_batched(_find_brain(batch))
             brains.append(brain)
         return _stack_brain_tensors(brains)
@@ -256,8 +257,10 @@ class BrainDataModule:
             raise ValueError("BrainDataModule requires a benchmark when using human_subject.")
 
         if hasattr(self.human_subject, "record") and self.human_subject.recordings is None:
+            print(f"Loading recordings for human subject: {self.human_subject.identifier() or 'unnamed'}", flush=True)
             self.human_subject.record(benchmark)
         if self.artificial_subject is not None and self.artificial_subject.recordings is None:
+            print(f"Loading recordings for artificial subject: {self.artificial_subject.identifier() or 'unnamed'}", flush=True)
             self.artificial_subject.record(benchmark)
 
         if self.human_subject.recordings is None:

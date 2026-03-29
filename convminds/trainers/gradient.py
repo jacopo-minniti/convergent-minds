@@ -1,9 +1,6 @@
-from __future__ import annotations
-
-from typing import Iterable, Tuple
-
 import torch
 import inspect
+from tqdm import tqdm
 
 
 class GradientTrainer:
@@ -24,8 +21,9 @@ class GradientTrainer:
 
     def fit(self, dataloader: Iterable, epochs: int = 1, *, target_key: str | None = None) -> None:
         self.model.train()
-        for _ in range(epochs):
-            for batch in dataloader:
+        for epoch in range(epochs):
+            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
+            for batch in pbar:
                 self.optimizer.zero_grad(set_to_none=True)
                 loss = self._step(batch, target_key=target_key)
                 if loss is None:
@@ -34,6 +32,7 @@ class GradientTrainer:
                 if self.max_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
+                pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     def _step(self, batch, *, target_key: str | None = None):
         batch = self._move_to_device(batch)
