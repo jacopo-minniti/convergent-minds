@@ -1,6 +1,9 @@
 import torch
 import inspect
+import logging
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 class GradientTrainer:
@@ -20,9 +23,13 @@ class GradientTrainer:
         self.optimizer = optimizer_cls(self.model.parameters(), lr=lr)
 
     def fit(self, dataloader: Iterable, epochs: int = 1, *, target_key: str | None = None) -> None:
+        logger.info(f"Starting training for {epochs} epochs on {self.device}")
         self.model.train()
         for epoch in range(epochs):
-            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
+            logger.info(f"Summary: Epoch {epoch+1}/{epochs}")
+            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch", leave=True)
+            total_loss = 0
+            count = 0
             for batch in pbar:
                 self.optimizer.zero_grad(set_to_none=True)
                 loss = self._step(batch, target_key=target_key)
@@ -32,7 +39,13 @@ class GradientTrainer:
                 if self.max_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
-                pbar.set_postfix(loss=f"{loss.item():.4f}")
+                
+                loss_val = loss.item()
+                total_loss += loss_val
+                count += 1
+                pbar.set_postfix(loss=f"{loss_val:.4f}", avg_loss=f"{total_loss/count:.4f}")
+            
+            logger.info(f"Epoch {epoch+1} finished. Average Loss: {total_loss/count:.4f}")
 
     def _step(self, batch, *, target_key: str | None = None):
         batch = self._move_to_device(batch)

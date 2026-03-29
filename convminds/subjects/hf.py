@@ -1,9 +1,7 @@
-from __future__ import annotations
-
-from importlib import import_module
-from typing import Any, Iterable
-
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from convminds.cache import load_cache, save_cache as save_cache_payload
 from convminds.subjects.base import ArtificialSubject
@@ -85,6 +83,7 @@ class HFArtificialSubject(ArtificialSubject):
         AutoModelForCausalLM = getattr(transformers, "AutoModelForCausalLM")
         AutoTokenizer = getattr(transformers, "AutoTokenizer")
 
+        logger.info(f"Loading {self.model_id} from Hugging Face...")
         config = AutoConfig.from_pretrained(self.model_id)
         if self.trained:
             model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -133,8 +132,11 @@ class HFArtificialSubject(ArtificialSubject):
         if not force:
             cached = load_cache("activations", config=cache_config)
             if cached is not None:
+                logger.info(f"Loaded cached activations for {self.model_id} on {benchmark.identifier}")
                 self._load_cache_payload(cached)
                 return self
+        
+        logger.info(f"Computing new activations for {self.model_id} on {benchmark.identifier}")
 
         from tqdm import tqdm
         all_values = []

@@ -1,11 +1,9 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence
-
 import torch
+import logging
 from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset, random_split
+
+logger = logging.getLogger(__name__)
 from torch.utils.data._utils.collate import default_collate
 
 from convminds.data.collate import collate_brains
@@ -160,9 +158,11 @@ class BrainDataModule:
         return [transforms]
 
     def setup(self) -> None:
+        logger.info("Setting up BrainDataModule")
         if self.human_subject is not None:
             self._setup_from_subjects()
         else:
+            logger.info("No human subject provided, splitting from provided dataset")
             train_dataset, test_dataset = self._split_dataset()
             self._fit_stateful_transforms(train_dataset)
             self._train_dataset = _TransformedDataset(train_dataset, self._apply_transforms)
@@ -227,6 +227,7 @@ class BrainDataModule:
     def _fit_stateful_transforms(self, train_dataset: Dataset) -> None:
         if not self.stateful_transforms:
             return
+        logger.info(f"Fitting {len(self.stateful_transforms)} stateful transforms")
         stateless_dataset = _TransformedDataset(
             train_dataset,
             lambda brain: self._apply_transforms(brain, include_stateful=False),
@@ -257,10 +258,10 @@ class BrainDataModule:
             raise ValueError("BrainDataModule requires a benchmark when using human_subject.")
 
         if hasattr(self.human_subject, "record") and self.human_subject.recordings is None:
-            print(f"Loading recordings for human subject: {self.human_subject.identifier() or 'unnamed'}", flush=True)
+            logger.info(f"Retrieving recordings for human subject: {self.human_subject.identifier()}")
             self.human_subject.record(benchmark)
         if self.artificial_subject is not None and self.artificial_subject.recordings is None:
-            print(f"Loading recordings for artificial subject: {self.artificial_subject.identifier() or 'unnamed'}", flush=True)
+            logger.info(f"Retrieving activations for artificial subject: {self.artificial_subject.identifier()}")
             self.artificial_subject.record(benchmark)
 
         if self.human_subject.recordings is None:

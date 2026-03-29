@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import logging
 from convminds.cache import load_cache, save_cache
 from convminds.subjects.base import Subject
+
+logger = logging.getLogger(__name__)
 
 
 class HumanSubject(Subject):

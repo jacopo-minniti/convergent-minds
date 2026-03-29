@@ -1,13 +1,7 @@
-from __future__ import annotations
-
-import os
-import subprocess
-import sys
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
-
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from convminds.benchmarks.base import BaseBenchmark
 from convminds.cache import convminds_home, load_cache, read_pickle, save_cache, write_pickle
@@ -179,6 +173,7 @@ class WordAlignedRecordingSource(HumanRecordingSource):
 
     def _load_payload(self) -> tuple[StimulusSet, np.ndarray, list[str], dict[str, Any]]:
         if not self.processed_path.exists() and self.ensure_fn is not None:
+            logger.info(f"Processed file {self.processed_path} missing. Running ensure_fn...")
             self.ensure_fn()
         if not self.processed_path.exists():
             raise FileNotFoundError(
@@ -477,24 +472,40 @@ class PereiraBenchmark(NeuroBenchmark):
         split_config: SplitConfig | None = None,
         description: str | None = None,
     ) -> None:
+        logger.info(f"Initializing PereiraBenchmark (window={alignment_window}, reduce={reduce})")
         spec = PEREIRA_SPEC
         description = description or spec.description
         processed_path = processed_path or (
             data_root() / spec.name / "processed" / f"{spec.name}.pca1000.wq.pkl.dic"
         )
         raw_dir = data_root() / spec.name / "raw"
-
         def _ensure():
             if processed_path.exists():
                 return
             
             # If the raw directory already has plenty of files, skip the slow OSF check
-            if raw_dir.exists() and len(list(raw_dir.rglob("*"))) > 5:
-                pass
+            if raw_dir.exists():
+                logger.info(f"Checking raw directory: {raw_dir}")
+                has_files = False
+                try:
+                    for _ in raw_dir.iterdir():
+                        has_files = True
+                        break
+                except OSError:
+                    pass
+                
+                if has_files:
+                    logger.info("Raw directory found and contains files. Skipping OSF check.")
+                else:
+                    logger.info("Raw directory is empty or missing. Starting OSF download...")
+                    raw_dir.mkdir(parents=True, exist_ok=True)
+                    download_osf(spec.dataset_id, raw_dir)
             else:
+                logger.info(f"Raw directory {raw_dir} does not exist. Creating and downloading...")
                 raw_dir.mkdir(parents=True, exist_ok=True)
                 download_osf(spec.dataset_id, raw_dir)
             
+            logger.info("Preparing processed data (this may involve NIfTI flattening and PCA)...")
             PereiraBenchmark.prepare_processed(
                 raw_dir,
                 output_path=processed_path,
@@ -520,6 +531,7 @@ class PereiraBenchmark(NeuroBenchmark):
             description=description,
             split_config=split_config,
         )
+        logger.info("PereiraBenchmark successfully initialized.")
 
     @staticmethod
     def download_raw(output_dir: str | Path) -> Path:
@@ -538,7 +550,10 @@ class PereiraBenchmark(NeuroBenchmark):
         output_path = Path(output_path).expanduser() if output_path else (
             data_root() / "pereira" / "processed" / "pereira.pca1000.wq.pkl.dic"
         )
+        logger.info(f"Target processed path: {output_path}")
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        logger.info("Scanning for zip files to extract...")
 
         # 1. Recursive extraction loop (handles nested zips)
         extracted_something = True
@@ -562,7 +577,7 @@ class PereiraBenchmark(NeuroBenchmark):
 
         # 3. Comprehensive Brain Data Scan
         nifti_files = sorted(list(raw_dir.rglob("*.nii*")))
-        print(f"Detected {len(nifti_files)} NIfTI data files in {raw_dir}")
+        logger.info(f"Detected {len(nifti_files)} NIfTI data files in {raw_dir}")
         nifti_map = {p.stem: p for p in nifti_files}
 
         vectors: list[np.ndarray] = []
@@ -730,7 +745,7 @@ def _read_manifest(path: Path) -> tuple["pd.DataFrame", str, str, str]:
     sep = "\t" if path.suffix in [".tsv", ".txt"] else ","
     encoding = "utf-8"
     
-    print(f"Attempting to read manifest: {path}")
+    logger.info(f"Attempting to read manifest: {path}")
     try:
         df = pd.read_csv(path, sep=sep, encoding=encoding)
     except UnicodeDecodeError:
