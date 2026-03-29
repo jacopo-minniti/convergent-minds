@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Iterable, Tuple
+
 import torch
 import inspect
 import logging
