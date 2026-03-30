@@ -15,11 +15,13 @@ logger = logging.getLogger(__name__)
 from convminds.benchmarks.base import BaseBenchmark
 from convminds.cache import convminds_home, load_cache, read_pickle, save_cache, write_pickle
 from convminds.data.neuro import (
+    align_brain_vectors,
     apply_pca,
     build_sentence_level_dataset,
     build_word_aligned_story,
     flatten_nifti,
     load_events_tsv,
+    load_mat_brain_data,
 )
 from convminds.interfaces import HumanRecordingData, HumanRecordingSource, SplitConfig, StimulusRecord, StimulusSet
 
