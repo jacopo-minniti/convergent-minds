@@ -763,7 +763,7 @@ class PereiraBenchmark(NeuroBenchmark):
 
         full_payload = {
             "payload": payload,
-            "id": spec.name,
+            "id": "pereira",
             "atlas": atlas_key,
             "coords": coords,
         }
