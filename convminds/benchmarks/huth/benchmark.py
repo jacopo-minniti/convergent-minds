@@ -48,10 +48,10 @@ class HuthBenchmark(BaseBenchmark):
         self.raw_dir = Path(raw_dir or convminds_home() / "data/huth/raw").expanduser()
         self.processed_path = Path(processed_path or convminds_home() / f"data/huth/processed/huth.{subject}.pkl").expanduser()
         
-        # OpenNeuro naming: S1 -> UTS01 (no 'sub-' inside derivatives)
+        # OpenNeuro naming: S1 -> sub-UTS01 (BIDS-compliant 'sub-' prefix)
         self.raw_subject = subject
-        self.subject = f"UTS{int(subject[1:]):02d}" if subject.startswith("S") else subject
-        self.datalad_subject = f"sub-UTS{int(subject[1:]):02d}" if subject.startswith("S") else subject
+        id_num = int(subject[1:]) if subject.startswith("S") else int(subject.replace("UTS", "").replace("sub-", ""))
+        self.subject = f"sub-UTS{id_num:02d}"
         
         self.trim = trim
         self.window = window

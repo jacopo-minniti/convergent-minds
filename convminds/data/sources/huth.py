@@ -91,8 +91,9 @@ class HuthRecordingSource(HumanRecordingSource):
         """
         import torch
         subject_orig = selector.get("subject", "S1") if selector else "S1"
-        # OpenNeuro naming: S1 -> UTS01 (inside derivatives)
-        subject = f"UTS{int(subject_orig[1:]):02d}" if subject_orig.startswith("S") else subject_orig
+        # OpenNeuro naming: S1 -> sub-UTS01 (BIDS-compliant 'sub-' prefix)
+        id_num = int(subject_orig[1:]) if subject_orig.startswith("S") else int(subject_orig.replace("UTS", "").replace("sub-", ""))
+        subject = f"sub-UTS{id_num:02d}"
             
         # 1. Resolve response files
         derivatives_path = self.ds_root / "derivatives"
@@ -147,7 +148,12 @@ class HuthRecordingSource(HumanRecordingSource):
                             all_rois[key] = torch.as_tensor(mask, dtype=torch.bool)
         
         if not all_values:
-            raise FileNotFoundError(f"No BOLD data found for subject {subject} in {subject_dir}")
+            msg = f"No BOLD data found for subject {subject} in {subject_dir}."
+            if any(subject_dir.glob("*.hf5")):
+                msg += " Found .hf5 files but they may be broken symlinks (datalad get failed)."
+            else:
+                msg += " No .hf5 files found in the directory."
+            raise FileNotFoundError(msg)
             
         feature_ids = [f"voxel-{i}" for i in range(all_values[0].shape[1])]
         
