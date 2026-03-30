@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import h5py
 import json
 import logging
 import subprocess
@@ -143,32 +144,74 @@ class HuthBenchmark(BaseBenchmark):
         Returns one StimulusRecord per story.
         """
         logger.info(f"Preparing Huth story-level stimuli for subject {self.subject}...")
-        stim_dir = self.raw_dir / "derivatives/TextGrids"
-        respdict_path = self.raw_dir / "derivatives/respdict.json"
+        
+        derivatives_dir = self.raw_dir / "derivatives"
+        stim_dir = derivatives_dir / "TextGrids"
+        subject_dir = derivatives_dir / "preprocessed_data" / self.subject
+        respdict_path = derivatives_dir / "respdict.json"
         
         with open(respdict_path, "r") as f:
             respdict = json.load(f)
             
-        if self.subject not in respdict:
-             # Try all variants: sub-UTS01, UTS01, S1
-             variants = [self.datalad_subject, self.subject, self.raw_subject]
-             alt_key = next((v for v in variants if v in respdict), None)
+        # Discover stories from the HDF5 files in the subject folder
+        if not subject_dir.exists():
+             raise FileNotFoundError(f"Subject folder not found: {subject_dir}")
              
-             if not alt_key:
-                  available_keys = list(respdict.keys())[:5]
-                  msg = (f"Subject ID variations {variants} not found in respdict.json. "
-                         f"Available keys (first 5): {available_keys}")
-                  logger.error(msg)
-                  raise ValueError(msg)
-             subject_stories = respdict[alt_key]
-        else:
-             subject_stories = respdict[self.subject]
-
+        hf5_files = list(subject_dir.glob("*.hf5"))
+        if not hf5_files:
+             logger.warning(f"No BOLD HDF5 files found for subject {self.subject} in {subject_dir}")
+             
         records = []
         rows = []
         
-        for story, tr_times in subject_stories.items():
+        for hf_path in hf5_files:
+            story = hf_path.stem
             tg_path = stim_dir / f"{story}.TextGrid"
+            
+            if not tg_path.exists():
+                logger.warning(f"TextGrid not found for story {story} at {tg_path}")
+                continue
+                
+            # TR timing: generate from respdict counts (TR=2.0s)
+            if story not in respdict:
+                 logger.warning(f"Story {story} not found in respdict.json. Guessing length from HDF5.")
+                 with h5py.File(hf_path, "r") as f:
+                      n_trs = f["data"].shape[0]
+            else:
+                 n_trs = respdict[story]
+                 
+            tr_times = np.arange(n_trs) * 2.0
+            
+            with open(tg_path, "r") as f:
+                content = f.read()
+                tg = TextGrid(content)
+                
+            word_tier = tg.get_tier("words")
+            if not word_tier:
+                continue
+            
+            intervals = word_tier["intervals"]
+            metadata = {
+                "tr_times": tr_times.tolist(),
+                "word_intervals": intervals,
+                "n_trs": n_trs
+            }
+            
+            full_text = " ".join([i["text"] for i in intervals if i["text"].strip()])
+            
+            rec = StimulusRecord(
+                stimulus_id=story,
+                text=full_text,
+                topic=story,
+                metadata=metadata
+            )
+            records.append(rec)
+            rows.append({
+                "stimulus_id": rec.stimulus_id,
+                "text": rec.text,
+                "story": story,
+                "metadata": rec.metadata
+            })
             if not tg_path.exists():
                 logger.warning(f"TextGrid not found for story {story} at {tg_path}")
                 continue
