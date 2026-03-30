@@ -71,7 +71,7 @@ class HuthVaeDataset(Dataset):
             
             # 1. Load Story-Units
             # huth_benchmark.human_recording_source returns TOKEN_LEVEL (one story per item)
-            recording_data = benchmark.human_recording_source.load_recordings([subj])
+            recording_data = benchmark.human_recording_source.load_recordings(benchmark, selector={"subject": subj})
             stories = recording_data.values # List of (T, V)
             story_names = recording_data.stimulus_ids
             rois = recording_data.metadata.get("rois", {})
