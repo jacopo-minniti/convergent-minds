@@ -1,13 +1,3 @@
-.env
-.venv/
-.logs/
-.jobs/
-dumps/
-prev-dumps/
-results/
-test.py
-test.sh
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -157,9 +147,19 @@ html
 cache
 .cache
 .idea/
+.env
+.venv/
+.logs/
+.jobs/
+.huggingface
+.convminds
+
 wandb/
 **/models/lm1b/resources
 conda_score--*
 brainscore_language/data/*/*.csv
 .convminds/
 convminds/brainscore/**/test.py
+
+test.py
+test.sh
