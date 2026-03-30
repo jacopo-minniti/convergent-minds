@@ -265,6 +265,10 @@ class BrainDataModule:
         if hasattr(self.human_subject, "record") and self.human_subject.recordings is None:
             logger.info(f"Retrieving recordings for human subject: {self.human_subject.identifier()}")
             self.human_subject.record(benchmark)
+        
+        # Log basic benchmark stats for debugging
+        num_stimuli = len(benchmark.stimuli) if hasattr(benchmark, "stimuli") else "unknown"
+        logger.info(f"Setup from subjects: {num_stimuli} stimuli in benchmark")
         if self.artificial_subject is not None and self.artificial_subject.recordings is None:
             logger.info(f"Retrieving activations for artificial subject: {self.artificial_subject.identifier()}")
             self.artificial_subject.record(benchmark)
@@ -305,9 +309,20 @@ class BrainDataModule:
             rois=rois,
         )
 
-        self._fit_stateful_transforms(train_dataset)
-        self._train_dataset = _TransformedDataset(train_dataset, self._apply_transforms)
         self._test_dataset = _TransformedDataset(test_dataset, self._apply_transforms)
+        
+        logger.info(f"DataModule Setup Complete: Train={len(train_dataset)}, Test={len(test_dataset)}")
+        # Log target mapping info
+        first_item = train_dataset[0]
+        if "target_latents" in first_item:
+            logger.info(f"Detected target_latents with shape: {first_item['target_latents'].shape}")
+        
+        brain = first_item["brain_tensor"]
+        logger.info(f"First brain sample: signal={brain.signal.shape}, coords={brain.coords.shape}")
+        if brain.coords.sum() == 0:
+            logger.warning("BRAIN COORDINATES ARE ALL ZEROS! SpatialAttentionEncoder will have no spatial grounding.")
+        else:
+            logger.info(f"Brain coordinates verified: mean={brain.coords.mean(dim=0).tolist()}")
 
 
 class _SubjectSplitDataset(Dataset):

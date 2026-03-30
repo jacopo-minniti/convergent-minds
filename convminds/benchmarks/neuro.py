@@ -184,6 +184,9 @@ class WordAlignedRecordingSource(HumanRecordingSource):
         if selector:
             metadata = dict(metadata)
             metadata["selector"] = dict(selector)
+        
+        # Ensure coordinates and ROI masks are in the top-level metadata
+        # so they can be picked up by the datamodule.
         return HumanRecordingData(
             values=values,
             stimulus_ids=stimuli.ids(),
@@ -218,23 +221,36 @@ class WordAlignedRecordingSource(HumanRecordingSource):
                 stimuli = _stimulus_set_from_serialized(cached["stimuli"])
                 values = np.asarray(cached["values"], dtype=float)
                 feature_ids = list(cached["feature_ids"])
-                metadata = dict(cached["metadata"])
+                metadata = dict(cached.get("metadata", {}))
                 return stimuli, values, feature_ids, metadata
 
         payload = read_pickle(self.processed_path)
-        stimuli, values, feature_ids, metadata = self._build_from_word_aligned(payload)
+        # Handle new dict-wrapped format with top-level metadata (e.g. coords)
+        if isinstance(payload, dict) and "payload" in payload:
+            stim_payload = payload["payload"]
+            metadata = {k: v for k, v in payload.items() if k != "payload"}
+        else:
+            stim_payload = payload
+            metadata = {}
+
+        stimuli, values, feature_ids, _metadata = self._build_from_word_aligned(stim_payload)
+        metadata.update(_metadata)
+        
+        values_arr = np.asarray(values, dtype=float)
+        ids_list = list(feature_ids)
+        
         if self.use_cache:
             save_cache(
                 "datasets",
                 config=config,
                 payload={
                     "stimuli": stimuli.to_serializable(),
-                    "values": np.asarray(values, dtype=float),
-                    "feature_ids": list(feature_ids),
+                    "values": values_arr,
+                    "feature_ids": ids_list,
                     "metadata": metadata,
                 },
             )
-        return stimuli, np.asarray(values, dtype=float), list(feature_ids), metadata
+        return stimuli, values_arr, ids_list, metadata
 
     def _build_from_word_aligned(
         self,
@@ -649,10 +665,13 @@ class PereiraBenchmark(NeuroBenchmark):
             logger.info(f"Processing {len(mat_files)} MATLAB files...")
             # MATLAB Pereira format: One file contains all stimuli for a participant
             
+            coords = None
             for mat_path in mat_files:
                 subject_id = str(mat_path.parent.name)
                 try:
-                    matrix, _ = load_mat_brain_data(mat_path, atlas_key=atlas_key, pool_rois=pool_rois, enforce_shape=enforce_shape)
+                    matrix, current_coords = load_mat_brain_data(mat_path, atlas_key=atlas_key, pool_rois=pool_rois, enforce_shape=enforce_shape)
+                    if coords is None:
+                        coords = current_coords
                 except Exception as e:
                     logger.error(f"Failed to load MAT file {mat_path}: {e}")
                     continue
@@ -741,7 +760,14 @@ class PereiraBenchmark(NeuroBenchmark):
             ((stim_id, stacked[idx], stim_text) for idx, (stim_id, stim_text) in enumerate(metadata)),
             alignment_window=alignment_window,
         )
-        write_pickle(output_path, payload)
+
+        full_payload = {
+            "payload": payload,
+            "id": spec.name,
+            "atlas": atlas_key,
+            "coords": coords,
+        }
+        write_pickle(output_path, full_payload)
         return output_path
 
 

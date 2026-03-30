@@ -33,6 +33,9 @@ class SpatialAttentionEncoder(nn.Module):
         
         if self.coord_proj is None:
             keys = torch.zeros(batch_size, num_voxels, self.query_dim, device=signal.device, dtype=signal.dtype)
+            if torch.any(coords != 0):
+                import logging
+                logging.getLogger(__name__).warning("Queries enabled but coord_proj is None! Coordinates are being ignored.")
         else:
             keys = self.coord_proj(coords)
 
@@ -40,6 +43,13 @@ class SpatialAttentionEncoder(nn.Module):
         signal_mean = signal.mean(dim=1).unsqueeze(-1)
         values = self.val_proj(signal_mean)
         
+        # Logging to confirm data flow (once per model instance or periodically)
+        if not hasattr(self, "_logged_shapes"):
+            import logging
+            log = logging.getLogger(__name__)
+            log.info(f"SpatialAttention Forward: Q={queries.shape}, K={keys.shape}, V={values.shape}")
+            self._logged_shapes = True
+            
         key_padding_mask = brain_tensor.padding_mask
         if key_padding_mask is not None and key_padding_mask.dim() == 1:
             key_padding_mask = key_padding_mask.unsqueeze(0)

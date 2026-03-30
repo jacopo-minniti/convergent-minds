@@ -62,20 +62,24 @@ if __name__ == "__main__":
     
     logger.info("Loading benchmark...")
     benchmark = cm.benchmarks.PereiraBenchmark(alignment_window=4, reduce="mean")
-    human = cm.subjects.HumanSubject(subject_ids=["1"])
-    oracle = cm.subjects.HFArtificialSubject("gpt2", layers=[-1])
+    
+    # Selecting the first subject discovered in the preprocessing
+    human = cm.subjects.HumanSubject()
+    oracle = cm.subjects.HFArtificialSubject("gpt2", layers=[-1], pooling_strategy="mean")
 
-    # Pereira is sentence-level beta maps, so HRF window is a no-op (t=1).
     datamodule = cm.data.BrainDataModule(
         benchmark=benchmark,
         human_subject=human,
         artificial_subject=oracle,
         stateless_transforms=[cm.transforms.HRFWindow(t=1)],
         stateful_transforms=[cm.transforms.ZScore(dim="batch")],
-        batch_size=4,
+        batch_size=32,
     )
     logger.info("Setting up DataModule (this may include recording activations)...")
     datamodule.setup()
+    
+    # Log stimulus preview for debugging
+    logger.info(f"Stimulus Sample: {benchmark.stimuli[0].stimulus_id} -> {benchmark.stimuli[0].text}")
 
     # Diagnostic: Check target variance to ensure R2 makes sense
     all_targets = []
@@ -88,7 +92,7 @@ if __name__ == "__main__":
     trainer = cm.trainers.GradientTrainer(model=model, loss_fn=torch.nn.MSELoss(), lr=1e-3)
 
     logger.info("Starting training...")
-    trainer.fit(datamodule.train_dataloader(), target_key="target_latents", epochs=20)
+    trainer.fit(datamodule.train_dataloader(), target_key="target_latents", epochs=10)
 
     model.eval()
     losses = []
