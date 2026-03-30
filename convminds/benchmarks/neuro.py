@@ -565,23 +565,38 @@ class PereiraBenchmark(NeuroBenchmark):
         logger.info("Scanning for zip files to extract...")
 
         # 1. Recursive extraction loop (handles nested zips)
-        extracted_something = True
-        while extracted_something:
-            extracted_something = False
-            zip_files = list(raw_dir.rglob("*.zip"))
+        logger.info(f"Checking for archives in {raw_dir}...")
+        processed_zips = set()
+        
+        # We allow up to 3 levels of nested zips to be safe but avoid infinite loops
+        for depth in range(3):
+            zip_files = [p for p in raw_dir.rglob("*.zip") if str(p) not in processed_zips]
+            if not zip_files:
+                break
+            
             import zipfile
+            logger.info(f"Extraction pass {depth+1}: Found {len(zip_files)} archives")
             for zip_path in zip_files:
+                processed_zips.add(str(zip_path))
+                # Check if it looks already extracted by looking for a directory with the same stem
                 target_dir = zip_path.parent / zip_path.stem
-                if not (target_dir.exists() and any(target_dir.iterdir())):
-                    try:
-                        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                            zip_ref.extractall(zip_path.parent)
-                            extracted_something = True
-                    except (zipfile.BadZipFile, PermissionError, OSError):
-                        continue
+                if target_dir.exists() and any(target_dir.iterdir()):
+                    continue
+                
+                logger.info(f"  -> Extracting {zip_path.name}...")
+                try:
+                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                        zip_ref.extractall(zip_path.parent)
+                except (zipfile.BadZipFile, PermissionError, OSError) as e:
+                    logger.error(f"  !! Failed to extract {zip_path.name}: {e}")
+                    continue
+        
+        logger.info("Archive processing complete.")
 
         # 2. Resolve manifest (favor root files)
+        logger.info("Resolving manifest file...")
         manifest_path = _resolve_manifest_path(raw_dir, manifest_path)
+        logger.info(f"Using manifest: {manifest_path}")
         df, id_col, text_col, beta_col = _read_manifest(manifest_path)
 
         # 3. Comprehensive Brain Data Scan
