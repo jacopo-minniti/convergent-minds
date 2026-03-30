@@ -146,9 +146,15 @@ class HuthVaeDataset(Dataset):
         }
 
 if __name__ == "__main__":
+    import os
     torch.manual_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(flag_device := f"Using device: {device}")
+    
+    logger.info("--- Huth VAE Pipeline Environment ---")
+    logger.info(f"CONVMINDS_HOME: {os.environ.get('CONVMINDS_HOME', '~/.convminds (default)')}")
+    logger.info(f"HF_HOME: {os.environ.get('HF_HOME', '~/.cache/huggingface (default)')}")
+    logger.info(f"Using device: {device}")
+    logger.info("---------------------------------------")
     
     # Subjects (Starting with 4 for speed, user suggested 8)
     # Ensure datalad download for ds003020 derivative is ready!

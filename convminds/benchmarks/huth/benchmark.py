@@ -112,23 +112,32 @@ class HuthBenchmark(BaseBenchmark):
 
             # 3. Recursive 'get' for required data
             try:
-                # Try both BIDS and Huth-lab naming conventions
+                # Ensure we have git identity else datalad fails (common on new clusters)
+                res = subprocess.run(["git", "config", "--global", "user.email"], capture_output=True, text=True)
+                if not res.stdout.strip():
+                    logger.info("Setting temporary git identity for DataLad...")
+                    subprocess.run(["git", "config", "--global", "user.email", "convminds@google.com"], check=False)
+                    subprocess.run(["git", "config", "--global", "user.name", "Convminds Bot"], check=False)
+
+                # Fetch story metadata first (small files)
+                logger.info("Fetching Huth metadata (TextGrids/respdict)...")
+                subprocess.run([
+                    "datalad", "get", "-d", str(self.raw_dir), 
+                    "derivatives/TextGrids", "derivatives/respdict.json"
+                ], check=True)
+                
+                # Try both BIDS and Huth-lab naming conventions for BOLD (large files)
                 for cand in [self.sub_prefix_id, self.subject_id]:
+                    logger.info(f"Fetching BOLD data for {cand}...")
                     subprocess.run([
                         "datalad", "get", "-r", "-d", str(self.raw_dir), 
-                        f"derivatives/preprocessed_data/{cand}", 
+                        f"derivatives/preprocessed_data/{cand}"
                     ], check=False)
-                
-                subprocess.run([
-                    "datalad", "get", "-r", "-d", str(self.raw_dir), 
-                    "derivatives/TextGrids",
-                    "derivatives/respdict.json"
-                ], check=True)
             except subprocess.CalledProcessError as e:
                 logger.warning(f"DataLad get attempt failed: {e}")
                 # We only raise if the metadata is still missing after the attempt
                 if not (self.raw_dir / "derivatives/respdict.json").exists():
-                     msg = f"Missing Huth metadata ({self.raw_dir / 'derivatives/respdict.json'}). Please run 'datalad get derivatives/respdict.json' on a login node."
+                     msg = f"Missing Huth metadata ({self.raw_dir / 'derivatives/respdict.json'}). Please verify internet access or run on a login node."
                      logger.error(msg)
                      raise FileNotFoundError(msg)
 
