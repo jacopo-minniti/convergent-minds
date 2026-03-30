@@ -490,11 +490,12 @@ class PereiraBenchmark(NeuroBenchmark):
         alignment_window: int = 4,
         reduce: str = "mean",
         atlas_key: str | None = "roiMultimaskGordon",
+        pool_rois: bool = True,
         enforce_shape: int | None = None,
         split_config: SplitConfig | None = None,
         description: str | None = None,
     ) -> None:
-        logger.info(f"Initializing PereiraBenchmark (window={alignment_window}, atlas={atlas_key})")
+        logger.info(f"Initializing PereiraBenchmark (window={alignment_window}, atlas={atlas_key}, pool={pool_rois})")
         spec = PEREIRA_SPEC
         description = description or spec.description
         
@@ -544,6 +545,7 @@ class PereiraBenchmark(NeuroBenchmark):
                 raw_dir,
                 output_path=processed_path,
                 atlas_key=atlas_key,
+                pool_rois=pool_rois,
                 enforce_shape=enforce_shape,
                 alignment_window=alignment_window,
             )
@@ -579,6 +581,7 @@ class PereiraBenchmark(NeuroBenchmark):
         output_path: str | Path | None = None,
         manifest_path: str | Path | None = None,
         atlas_key: str | None = "roiMultimaskGordon",
+        pool_rois: bool = True,
         enforce_shape: int | None = None,
         alignment_window: int = 4,
     ) -> Path:
@@ -639,15 +642,16 @@ class PereiraBenchmark(NeuroBenchmark):
         
         nifti_map = {p.stem: p for p in nifti_files}
 
+        vectors = []
+        metadata = []
+
         if mat_files:
             logger.info(f"Processing {len(mat_files)} MATLAB files...")
             # MATLAB Pereira format: One file contains all stimuli for a participant
-            all_matrices = []
-            all_metadata = []
             
             for mat_path in mat_files:
                 try:
-                    matrix, _ = load_mat_brain_data(mat_path, atlas_key=atlas_key, enforce_shape=enforce_shape)
+                    matrix, _ = load_mat_brain_data(mat_path, atlas_key=atlas_key, pool_rois=pool_rois, enforce_shape=enforce_shape)
                 except Exception as e:
                     logger.error(f"Failed to load MAT file {mat_path}: {e}")
                     continue
@@ -680,14 +684,11 @@ class PereiraBenchmark(NeuroBenchmark):
                     
                     if not match.empty:
                         text = str(match.iloc[0][text_col])
-                        all_matrices.append(matrix[i])
-                        all_metadata.append((stim_id, text))
+                        vectors.append(matrix[i])
+                        metadata.append((stim_id, text))
 
-            if not all_matrices:
+            if not vectors:
                 raise ValueError(f"Found {len(mat_files)} MAT files but could not match them to stimuli in {manifest_path}")
-
-            vectors = all_matrices
-            metadata = all_metadata
         else:
             # Traditional NIfTI code path
             for index, row in df.iterrows():
@@ -723,7 +724,13 @@ class PereiraBenchmark(NeuroBenchmark):
         if not vectors:
             raise ValueError(f"No brain data found matching manifest {manifest_path}.")
 
-        # Stack vectors (this will work if shapes are consistent)
+        # Stack vectors (ensuring consistency)
+        if vectors:
+            max_len = max(v.shape[0] for v in vectors)
+            if any(v.shape[0] != max_len for v in vectors):
+                logger.info(f"Normalizing feature dimensions to {max_len} (found variability in subject ROI sizes)")
+                vectors = [np.pad(v, (0, max_len - v.shape[0])) if v.shape[0] < max_len else v[:max_len] for v in vectors]
+        
         stacked = np.asarray(vectors, dtype=float)
         
         # MODULAR: No PCA here. We store the full (aligned) resolution.

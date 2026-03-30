@@ -115,37 +115,22 @@ def load_mat_brain_data(
     path: str | Path,
     *,
     atlas_key: str | None = None,
+    pool_rois: bool = False,
     enforce_shape: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     sio = _require_scipy()
     path = Path(path).expanduser()
     mat = sio.loadmat(str(path))
     
-    # Check for Pereira 2018 standard format
-    # structure: examples (n_stim, n_voxels) and meta struct
+    # Check for Pereira 2018 standard format (examples + meta)
     if "examples" in mat and "meta" in mat:
         examples = mat["examples"] # format (stimuli, voxels)
         meta = mat["meta"][0, 0] # access first element of 1x1 struct array
         
-        # 1. Handle Atlas Filtering if requested
-        if atlas_key and atlas_key in meta.dtype.names:
-            roi_mask = meta[atlas_key].flatten()
-            indices = np.where(roi_mask > 0)[0]
-            examples = examples[:, indices]
-        
-        # 2. Extract Coordinates (3D space mapping)
+        # 1. Resolve Initial indices and coordinates
         if "indicesIn3D" in meta.dtype.names:
-            # indicesIn3D is linear indices in a 3D volume
             dims = meta["dimensions"].flatten() if "dimensions" in meta.dtype.names else [0, 0, 0]
             indices = meta["indicesIn3D"].flatten() - 1 # MATLAB is 1-indexed
-            
-            # If we filtered by atlas, sub-select coordinates too
-            if atlas_key and atlas_key in meta.dtype.names:
-                roi_mask = meta[atlas_key].flatten()
-                filtered_full_indices = np.where(roi_mask > 0)[0]
-                indices = indices[filtered_full_indices]
-
-            # Convert linear indices back to 3D coords
             try:
                 coords = np.column_stack(np.unravel_index(indices, dims))
             except Exception:
@@ -154,10 +139,34 @@ def load_mat_brain_data(
             n_voxels = examples.shape[1]
             coords = np.column_stack([np.arange(n_voxels), np.zeros(n_voxels), np.zeros(n_voxels)])
 
-        # 3. Shape Enforcement (for multi-subject stacking)
+        # 2. Handle Atlas Filtering and ROI Pooling
+        if atlas_key and atlas_key in meta.dtype.names:
+            roi_ids = meta[atlas_key].flatten()
+            
+            if pool_rois:
+                # Average voxels within each unique ROI (excluding 0 which is typically non-ROI)
+                valid_roi_ids = np.unique(roi_ids[roi_ids > 0])
+                pooled_examples = []
+                pooled_coords = []
+                for rid in valid_roi_ids:
+                    roi_indices = np.where(roi_ids == rid)[0]
+                    # Average activations
+                    pooled_examples.append(examples[:, roi_indices].mean(axis=1))
+                    # Average coordinates (centroid)
+                    pooled_coords.append(coords[roi_indices].mean(axis=0))
+                
+                if pooled_examples:
+                    examples = np.column_stack(pooled_examples)
+                    coords = np.asarray(pooled_coords)
+            else:
+                # Standard voxel subsetting
+                indices = np.where(roi_ids > 0)[0]
+                examples = examples[:, indices]
+                coords = coords[indices]
+        
+        # 3. Shape Enforcement (e.g. for multi-subject stacking if not pooled or if pool sizes differ)
         if enforce_shape is not None:
             examples = align_brain_vectors(examples, target_len=enforce_shape)
-            # Adjust coords if truncated (padding coords with zeros is safer than crashing)
             if coords.shape[0] < enforce_shape:
                 pad_len = enforce_shape - coords.shape[0]
                 coords = np.pad(coords, ((0, pad_len), (0, 0)), mode='constant')
