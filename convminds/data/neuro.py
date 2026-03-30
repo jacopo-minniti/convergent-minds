@@ -111,7 +111,12 @@ def flatten_nifti(
     return matrix.astype(float), coords.astype(float)
 
 
-def load_mat_brain_data(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+def load_mat_brain_data(
+    path: str | Path,
+    *,
+    atlas_key: str | None = None,
+    enforce_shape: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     sio = _require_scipy()
     path = Path(path).expanduser()
     mat = sio.loadmat(str(path))
@@ -122,23 +127,61 @@ def load_mat_brain_data(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
         examples = mat["examples"] # format (stimuli, voxels)
         meta = mat["meta"][0, 0] # access first element of 1x1 struct array
         
-        # Identify matrix coordinates if possible
-        if hasattr(meta, "indicesIn3D"):
+        # 1. Handle Atlas Filtering if requested
+        if atlas_key and atlas_key in meta.dtype.names:
+            roi_mask = meta[atlas_key].flatten()
+            indices = np.where(roi_mask > 0)[0]
+            examples = examples[:, indices]
+        
+        # 2. Extract Coordinates (3D space mapping)
+        if "indicesIn3D" in meta.dtype.names:
             # indicesIn3D is linear indices in a 3D volume
-            dims = getattr(meta, "dimensions", [0, 0, 0])
+            dims = meta["dimensions"].flatten() if "dimensions" in meta.dtype.names else [0, 0, 0]
             indices = meta["indicesIn3D"].flatten() - 1 # MATLAB is 1-indexed
             
+            # If we filtered by atlas, sub-select coordinates too
+            if atlas_key and atlas_key in meta.dtype.names:
+                roi_mask = meta[atlas_key].flatten()
+                filtered_full_indices = np.where(roi_mask > 0)[0]
+                indices = indices[filtered_full_indices]
+
             # Convert linear indices back to 3D coords
-            coords = np.column_stack(np.unravel_index(indices, dims))
-            return examples.astype(float), coords.astype(float)
+            try:
+                coords = np.column_stack(np.unravel_index(indices, dims))
+            except Exception:
+                coords = np.column_stack([np.arange(examples.shape[1]), np.zeros(examples.shape[1]), np.zeros(examples.shape[1])])
         else:
-            # Fallback if indicesIn3D not found
             n_voxels = examples.shape[1]
-            dummy_coords = np.column_stack([np.arange(n_voxels), np.zeros(n_voxels), np.zeros(n_voxels)])
-            return examples.astype(float), dummy_coords.astype(float)
+            coords = np.column_stack([np.arange(n_voxels), np.zeros(n_voxels), np.zeros(n_voxels)])
+
+        # 3. Shape Enforcement (for multi-subject stacking)
+        if enforce_shape is not None:
+            examples = align_brain_vectors(examples, target_len=enforce_shape)
+            # Adjust coords if truncated (padding coords with zeros is safer than crashing)
+            if coords.shape[0] < enforce_shape:
+                pad_len = enforce_shape - coords.shape[0]
+                coords = np.pad(coords, ((0, pad_len), (0, 0)), mode='constant')
+            elif coords.shape[0] > enforce_shape:
+                coords = coords[:enforce_shape]
+
+        return examples.astype(float), coords.astype(float)
 
     raise ValueError(f"MAT file {path} does not match any recognized Pereira/Neuro brain data format. "
                      f"Expected keys 'examples' and 'meta'. Found: {list(mat.keys())}")
+
+
+def align_brain_vectors(data: np.ndarray, target_len: int) -> np.ndarray:
+    """Ensures a brain activation matrix has a consistent number of voxels."""
+    n_stim, n_voxels = data.shape
+    if n_voxels == target_len:
+        return data
+    
+    if n_voxels > target_len:
+        return data[:, :target_len]
+    else:
+        # Pad with zeros
+        padding = np.zeros((n_stim, target_len - n_voxels))
+        return np.concatenate([data, padding], axis=1)
 
 
 def align_tokens_to_trs(

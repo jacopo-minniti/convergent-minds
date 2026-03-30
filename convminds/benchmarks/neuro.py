@@ -487,14 +487,19 @@ class PereiraBenchmark(NeuroBenchmark):
         processed_path: str | Path | None = None,
         alignment_window: int = 4,
         reduce: str = "mean",
+        atlas_key: str | None = "roiMultimaskGordon",
+        enforce_shape: int | None = None,
         split_config: SplitConfig | None = None,
         description: str | None = None,
     ) -> None:
-        logger.info(f"Initializing PereiraBenchmark (window={alignment_window}, reduce={reduce})")
+        logger.info(f"Initializing PereiraBenchmark (window={alignment_window}, atlas={atlas_key})")
         spec = PEREIRA_SPEC
         description = description or spec.description
+        
+        # Cache filename depends on the atlas used
+        atlas_suffix = f".{atlas_key}" if atlas_key else ".whole_head"
         processed_path = processed_path or (
-            data_root() / spec.name / "processed" / f"{spec.name}.pca1000.wq.pkl.dic"
+            data_root() / spec.name / "processed" / f"{spec.name}{atlas_suffix}.wq.pkl.dic"
         )
         raw_dir = data_root() / spec.name / "raw"
         def _ensure():
@@ -532,11 +537,12 @@ class PereiraBenchmark(NeuroBenchmark):
             # We don't perform the extraction here anymore, we let prepare_processed handle it
             # since it has a sophisticated nested-zip extraction loop.
             
-            logger.info("Preparing processed data (this may involve NIfTI/MAT flattening and PCA)...")
+            logger.info("Preparing processed data (extracting and aligning voxels)...")
             PereiraBenchmark.prepare_processed(
                 raw_dir,
                 output_path=processed_path,
-                n_components=1000,
+                atlas_key=atlas_key,
+                enforce_shape=enforce_shape,
                 alignment_window=alignment_window,
             )
 
@@ -570,12 +576,13 @@ class PereiraBenchmark(NeuroBenchmark):
         *,
         output_path: str | Path | None = None,
         manifest_path: str | Path | None = None,
-        n_components: int = 1000,
+        atlas_key: str | None = "roiMultimaskGordon",
+        enforce_shape: int | None = None,
         alignment_window: int = 4,
     ) -> Path:
         raw_dir = Path(raw_dir).expanduser()
         output_path = Path(output_path).expanduser() if output_path else (
-            data_root() / "pereira" / "processed" / "pereira.pca1000.wq.pkl.dic"
+            data_root() / "pereira" / "processed" / "pereira.wq.pkl.dic"
         )
         logger.info(f"Target processed path: {output_path}")
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -637,15 +644,16 @@ class PereiraBenchmark(NeuroBenchmark):
             all_metadata = []
             
             for mat_path in mat_files:
-                import scipy.io as sio
-                mat = sio.loadmat(str(mat_path))
-                if "examples" not in mat:
+                try:
+                    matrix, _ = load_mat_brain_data(mat_path, atlas_key=atlas_key, enforce_shape=enforce_shape)
+                except Exception as e:
+                    logger.error(f"Failed to load MAT file {mat_path}: {e}")
                     continue
                 
-                examples = mat["examples"] # (n_stim, n_voxels)
+                import scipy.io as sio
+                mat = sio.loadmat(str(mat_path))
+                
                 # Determine stimulus identifier key
-                # Expt 1: keyConcept (180x1)
-                # Expt 2/3: labelsSentences (384x1) or keySentences
                 id_keys = ["keyConcept", "labelsSentences", "keySentences", "labelsConcept"]
                 ids = None
                 for k in id_keys:
@@ -654,10 +662,9 @@ class PereiraBenchmark(NeuroBenchmark):
                         break
                 
                 if ids is None:
-                    # Guess by row count if known
-                    if examples.shape[0] == 180: ids = np.arange(180)
-                    elif examples.shape[0] == 384: ids = np.arange(384)
-                    elif examples.shape[0] == 243: ids = np.arange(243)
+                    if matrix.shape[0] == 180: ids = np.arange(180)
+                    elif matrix.shape[0] == 384: ids = np.arange(384)
+                    elif matrix.shape[0] == 243: ids = np.arange(243)
                     else: continue
                 
                 # Flatten mat ids to strings
@@ -665,15 +672,13 @@ class PereiraBenchmark(NeuroBenchmark):
                 
                 # Match these IDs to the manifest to get text
                 for i, stim_id in enumerate(ids):
-                    # Find matching row in manifest
                     match = df[df[id_col].astype(str).str.contains(stim_id)]
                     if match.empty:
-                        # try stem match or fuzzy
                         match = df[df[id_col].astype(str) == stim_id]
                     
                     if not match.empty:
                         text = str(match.iloc[0][text_col])
-                        all_matrices.append(examples[i])
+                        all_matrices.append(matrix[i])
                         all_metadata.append((stim_id, text))
 
             if not all_matrices:
@@ -687,13 +692,11 @@ class PereiraBenchmark(NeuroBenchmark):
                 stimulus_id = str(row[id_col])
                 text = str(row[text_col])
                 
-                # Resolve beta path
                 beta_path = None
                 if beta_col and row[beta_col] and str(row[beta_col]) != "None":
                     beta_path = raw_dir / str(row[beta_col])
                 
                 if not beta_path or not beta_path.exists():
-                    # Matching Strategy: stem match, text match, or index match
                     beta_path = (
                         nifti_map.get(stimulus_id) 
                         or nifti_map.get(text[:30])
@@ -705,6 +708,10 @@ class PereiraBenchmark(NeuroBenchmark):
 
                 try:
                     matrix, _ = flatten_nifti(beta_path)
+                    # For NIfTI, we can't easily atlas filter without the atlas file, 
+                    # but we can at least ensure shape if provided.
+                    if enforce_shape is not None:
+                        matrix = align_brain_vectors(matrix, enforce_shape)
                 except Exception:
                     continue
                 vector = matrix.mean(axis=0)
@@ -714,11 +721,12 @@ class PereiraBenchmark(NeuroBenchmark):
         if not vectors:
             raise ValueError(f"No brain data found matching manifest {manifest_path}.")
 
+        # Stack vectors (this will work if shapes are consistent)
         stacked = np.asarray(vectors, dtype=float)
-        reduced, _ = apply_pca(stacked, n_components=n_components)
-
+        
+        # MODULAR: No PCA here. We store the full (aligned) resolution.
         payload = build_sentence_level_dataset(
-            ((stim_id, reduced[idx], stim_text) for idx, (stim_id, stim_text) in enumerate(metadata)),
+            ((stim_id, stacked[idx], stim_text) for idx, (stim_id, stim_text) in enumerate(metadata)),
             alignment_window=alignment_window,
         )
         write_pickle(output_path, payload)
