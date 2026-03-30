@@ -8,15 +8,6 @@ This script wires together the core convminds abstractions:
 - Simple brain encoder model trained with MSE
 """
 
-# TODO:
-# 1. test test.py
-# 2. inspect different datasets 
-
-# 1. make README less weird
-# 2. add all the cool things in readme for the repo
-# 3. add versioning
-# 4. publish to pip 
-
 import numpy as np
 import torch
 
@@ -38,26 +29,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class BrainToGPT2(cnn.Module):
-    def __init__(self, *, num_queries: int = 16, llm_dim: int = 768):
+class BrainToGPT2(torch.nn.Module):
+    """Linear baseline: maps ROI activations directly to LLM latents."""
+    def __init__(self, n_voxels: int = 333, llm_dim: int = 768):
         super().__init__()
-        self.encoder = cnn.encoders.SpatialAttentionEncoder(
-            num_queries=num_queries,
-            query_dim=llm_dim,
-            use_coords=True,
-        )
-        self.readout = torch.nn.Linear(llm_dim, llm_dim)
+        self.proj = torch.nn.Linear(n_voxels, llm_dim)
 
     def forward(self, brain_tensor):
-        latents = self.encoder(brain_tensor)
-        pooled = latents.mean(dim=1)
-        return self.readout(pooled)
+        # brain_tensor.signal is (B, T, N). We take T=1 or mean over T.
+        x = brain_tensor.signal.mean(dim=1)
+        return self.proj(x)
 
 
 if __name__ == "__main__":
     torch.manual_seed(0)
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
     logger.info("Loading benchmark...")
@@ -71,7 +58,7 @@ if __name__ == "__main__":
         benchmark=benchmark,
         human_subject=human,
         artificial_subject=oracle,
-        stateless_transforms=[cm.transforms.HRFWindow(t=1)],
+        stateless_transforms=[],
         stateful_transforms=[cm.transforms.ZScore(dim="batch")],
         batch_size=32,
     )
@@ -88,11 +75,12 @@ if __name__ == "__main__":
     all_targets = np.concatenate(all_targets, axis=0)
     logger.info(f"Target stats (train): mean={all_targets.mean():.4f}, std={all_targets.std():.4f}, var={all_targets.var():.4f}")
 
-    model = BrainToGPT2(num_queries=16, llm_dim=768).to(device)
-    trainer = cm.trainers.GradientTrainer(model=model, loss_fn=torch.nn.MSELoss(), lr=1e-3)
+    model = BrainToGPT2(n_voxels=333, llm_dim=768).to(device)
+    # Using L2 regularization (weight_decay) and smaller LR to generalize better
+    trainer = cm.trainers.GradientTrainer(model=model, loss_fn=torch.nn.MSELoss(), lr=5e-4, weight_decay=0.01)
 
     logger.info("Starting training...")
-    trainer.fit(datamodule.train_dataloader(), target_key="target_latents", epochs=10)
+    trainer.fit(datamodule.train_dataloader(), target_key="target_latents", epochs=20)
 
     model.eval()
     losses = []

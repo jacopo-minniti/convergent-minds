@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, TYPE_CHECKING
+if TYPE_CHECKING:
+    from convminds.data.types import DataCategory
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class RecordedSplit:
     train_stimuli: StimulusSet
     test_stimuli: StimulusSet
     metadata: dict[str, Any] = field(default_factory=dict)
+    category: DataCategory | None = None
 
     def to_cache_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +113,7 @@ class RecordedSplit:
             "train_stimuli": self.train_stimuli.to_serializable(),
             "test_stimuli": self.test_stimuli.to_serializable(),
             "metadata": dict(self.metadata),
+            "category": self.category,
         }
 
 
@@ -119,6 +123,7 @@ class HumanRecordingData:
     stimulus_ids: list[str]
     feature_ids: list[str]
     metadata: dict[str, Any] = field(default_factory=dict)
+    category: DataCategory | None = None
 
 
 @dataclass

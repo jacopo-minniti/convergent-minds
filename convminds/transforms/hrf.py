@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 from convminds.data.primitives import BrainTensor
+from convminds.data.types import DataCategory, check_trait
 from convminds.transforms.base import StatelessTransform
 
 
@@ -14,6 +15,9 @@ class HRFWindow(StatelessTransform):
         self.pad = pad
 
     def __call__(self, brain: BrainTensor) -> BrainTensor:
+        # Prevent logic error: HRF Window only applies to Time-Series Token-Level data.
+        check_trait(brain, DataCategory.TOKEN_LEVEL, operation_name="HRFWindow")
+        
         signal = brain.signal
         is_2d = signal.dim() == 2
         t_dim = 0 if is_2d else 1
@@ -45,4 +49,10 @@ class HRFWindow(StatelessTransform):
         else:
             window = signal[:, -self.t :, :]
 
-        return BrainTensor(signal=window, coords=brain.coords, rois=brain.rois, padding_mask=brain.padding_mask)
+        return BrainTensor(
+            signal=window, 
+            coords=brain.coords, 
+            rois=brain.rois, 
+            padding_mask=brain.padding_mask,
+            category=brain.category,
+        )

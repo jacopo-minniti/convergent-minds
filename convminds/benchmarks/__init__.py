@@ -1,14 +1,13 @@
 from convminds.interfaces import Benchmark
 
 from .base import InMemoryBenchmark
-from .neuro import HuthBenchmark, NarrativesBenchmark, PereiraBenchmark, NeuroBenchmark, WordAlignedRecordingSource
+from .pereira import PereiraBenchmark
+from .openneuro import HuthBenchmark, NarrativesBenchmark
 
 __all__ = [
     "Benchmark",
     "InMemoryBenchmark",
-    "NeuroBenchmark",
-    "WordAlignedRecordingSource",
+    "PereiraBenchmark",
     "HuthBenchmark",
     "NarrativesBenchmark",
-    "PereiraBenchmark",
 ]

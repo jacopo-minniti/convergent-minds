@@ -19,12 +19,13 @@ class GradientTrainer:
         optimizer_cls=torch.optim.AdamW,
         device: torch.device | None = None,
         max_grad_norm: float | None = None,
+        **optimizer_kwargs,
     ):
         self.model = model
         self.loss_fn = loss_fn
         self.device = device or self._infer_device()
         self.max_grad_norm = max_grad_norm
-        self.optimizer = optimizer_cls(self.model.parameters(), lr=lr)
+        self.optimizer = optimizer_cls(self.model.parameters(), lr=lr, **optimizer_kwargs)
 
     def fit(self, dataloader: Iterable, epochs: int = 1, *, target_key: str | None = None) -> None:
         logger.info(f"Starting training for {epochs} epochs on {self.device}")
