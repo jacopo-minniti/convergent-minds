@@ -46,7 +46,12 @@ class HuthBenchmark(BaseBenchmark):
     ) -> None:
         self.raw_dir = Path(raw_dir or convminds_home() / "data/huth/raw").expanduser()
         self.processed_path = Path(processed_path or convminds_home() / f"data/huth/processed/huth.{subject}.pkl").expanduser()
-        self.subject = subject
+        
+        # OpenNeuro naming: S1 -> UTS01 (no 'sub-' inside derivatives)
+        self.raw_subject = subject
+        self.subject = f"UTS{int(subject[1:]):02d}" if subject.startswith("S") else subject
+        self.datalad_subject = f"sub-UTS{int(subject[1:]):02d}" if subject.startswith("S") else subject
+        
         self.trim = trim
         self.window = window
         self.use_datalad = use_datalad
@@ -61,11 +66,11 @@ class HuthBenchmark(BaseBenchmark):
         source = HuthRecordingSource(ds_root=self.raw_dir)
         
         super().__init__(
-            identifier=f"huth.{subject}",
+            identifier=f"huth.{self.raw_subject}",
             stimuli=stimuli,
             split_config=SplitConfig(cv=1, topic_splitting=True, train_size=0.9, random_state=42),
             human_recording_source=source,
-            description=f"Huth 2023 natural language fMRI benchmark for subject {subject}."
+            description=f"Huth 2023 natural language fMRI benchmark for subject {self.raw_subject} ({self.subject})."
         )
 
     def ensure_data(self):
@@ -83,23 +88,38 @@ class HuthBenchmark(BaseBenchmark):
                 logger.error(f"Failed to clone Huth dataset: {e}")
                 raise
 
-        # Ensure derivative/preprocessed_data and derivative/stimuli are fetched
-        derivative_dir = self.raw_dir / "derivative"
-        if not (derivative_dir / "preprocessed_data").exists() or not (derivative_dir / "stimuli").exists():
+        # Ensure derivatives/preprocessed_data and derivatives/TextGrids are fetched
+        # Note: OpenNeuro uses 'derivatives' (plural) and TextGrids
+        derivatives_dir = self.raw_dir / "derivatives"
+        if not (derivatives_dir / "preprocessed_data").exists() or not (derivatives_dir / "TextGrids").exists():
             logger.info("Fetching derivatives via DataLad...")
+            
+            # --- SELF-HEALING LOGIC FOR OPENNEURO ---
+            # 1. Reset annex-ignore (common pitfall on clones)
             try:
-                # We fetch the specific subject and stimuli
+                subprocess.run(["git", "-C", str(self.raw_dir), "config", "remote.origin.annex-ignore", "false"], check=False)
+            except Exception: pass
+            
+            # 2. Enable S3 Sibling (required for ds003020 files)
+            try:
+                subprocess.run(["datalad", "siblings", "-d", str(self.raw_dir), "enable", "-s", "s3-BACKUP"], check=False)
+            except Exception: pass
+
+            # 3. Recursive 'get' for required data
+            try:
                 subprocess.run([
-                    "datalad", "get", "-d", str(self.raw_dir), 
-                    f"derivative/preprocessed_data/{self.subject}", 
-                    "derivative/stimuli",
-                    "derivative/respdict.json"
+                    "datalad", "get", "-r", "-d", str(self.raw_dir), 
+                    f"derivatives/preprocessed_data/{self.subject}", 
+                    "derivatives/TextGrids",
+                    "derivatives/respdict.json"
                 ], check=True)
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to fetch Huth derivatives: {e}")
-                # We don't raise here if some data exists, but ideally we should
-                if not (self.raw_dir / "derivative/respdict.json").exists():
-                     raise
+                logger.warning(f"DataLad get attempt failed: {e}")
+                # We only raise if the metadata is still missing after the attempt
+                if not (self.raw_dir / "derivatives/respdict.json").exists():
+                     msg = f"Missing Huth metadata ({self.raw_dir / 'derivatives/respdict.json'}). Please run 'datalad get derivatives/respdict.json' on a login node."
+                     logger.error(msg)
+                     raise FileNotFoundError(msg)
 
     def _load_or_prepare_stimuli(self) -> StimulusSet:
         if self.processed_path.exists():
@@ -123,16 +143,22 @@ class HuthBenchmark(BaseBenchmark):
         Returns one StimulusRecord per story.
         """
         logger.info(f"Preparing Huth story-level stimuli for subject {self.subject}...")
-        stim_dir = self.raw_dir / "derivative/stimuli"
-        respdict_path = self.raw_dir / "derivative/respdict.json"
+        stim_dir = self.raw_dir / "derivatives/TextGrids"
+        respdict_path = self.raw_dir / "derivatives/respdict.json"
         
         with open(respdict_path, "r") as f:
             respdict = json.load(f)
             
         if self.subject not in respdict:
-             raise ValueError(f"Subject {self.subject} not found in respdict.json")
-             
-        subject_stories = respdict[self.subject]
+             # Fallback: maybe it's keyed by S1..S8 in respdict? 
+             # Let's check for UTS01 and raw_subject
+             alt_key = self.raw_subject if self.raw_subject in respdict else None
+             if not alt_key:
+                  raise ValueError(f"Subject {self.subject} (nor {self.raw_subject}) not found in respdict.json")
+             subject_stories = respdict[alt_key]
+        else:
+             subject_stories = respdict[self.subject]
+
         records = []
         rows = []
         

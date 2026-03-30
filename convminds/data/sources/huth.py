@@ -89,15 +89,16 @@ class HuthRecordingSource(HumanRecordingSource):
         """
         Loads fMRI responses for the stories defined in the benchmark.
         """
-        subject = selector.get("subject", "S1") if selector else "S1"
-        if isinstance(subject, list):
-            subject = subject[0]
+        import torch
+        subject_orig = selector.get("subject", "S1") if selector else "S1"
+        # OpenNeuro naming: S1 -> UTS01 (inside derivatives)
+        subject = f"UTS{int(subject_orig[1:]):02d}" if subject_orig.startswith("S") else subject_orig
             
         # 1. Resolve response files
-        derivative_path = self.ds_root / "derivative"
-        subject_dir = derivative_path / "preprocessed_data" / subject
+        derivatives_path = self.ds_root / "derivatives"
+        subject_dir = derivatives_path / "preprocessed_data" / subject
         
-        stories = [s.topic for s in benchmark.stimuli] # Topic holds the story name
+        stories = [s.stimulus_id for s in benchmark.stimuli] # Stimulus ID holds the story name
         unique_stories = sorted(list(set(stories)))
         
         # 2. Check cache
@@ -113,7 +114,7 @@ class HuthRecordingSource(HumanRecordingSource):
             if cached is not None:
                 logger.info(f"Loaded cached Huth recordings for {subject}")
                 return HumanRecordingData(
-                    values=np.asarray(cached["values"], dtype=float),
+                    values=cached["values"],
                     stimulus_ids=list(cached["stimulus_ids"]),
                     feature_ids=list(cached["feature_ids"]),
                     metadata=dict(cached["metadata"]),
@@ -133,7 +134,7 @@ class HuthRecordingSource(HumanRecordingSource):
                 
             with h5py.File(resp_path, "r") as hf:
                 data = hf["data"][:] # (TR, Voxels)
-                all_values.append(data)
+                all_values.append(data.astype(np.float32))
                 all_story_ids.append(story)
                 
                 # Extract all ROI masks (datasets starting with 'roi_')
