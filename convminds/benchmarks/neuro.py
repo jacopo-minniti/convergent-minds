@@ -650,6 +650,7 @@ class PereiraBenchmark(NeuroBenchmark):
             # MATLAB Pereira format: One file contains all stimuli for a participant
             
             for mat_path in mat_files:
+                subject_id = str(mat_path.parent.name)
                 try:
                     matrix, _ = load_mat_brain_data(mat_path, atlas_key=atlas_key, pool_rois=pool_rois, enforce_shape=enforce_shape)
                 except Exception as e:
@@ -684,8 +685,10 @@ class PereiraBenchmark(NeuroBenchmark):
                     
                     if not match.empty:
                         text = str(match.iloc[0][text_col])
+                        # Unique identifier: Subject + Stimulus (ensures we keep all subjects)
+                        unique_id = f"{subject_id}:{stim_id}"
                         vectors.append(matrix[i])
-                        metadata.append((stim_id, text))
+                        metadata.append((unique_id, text))
 
             if not vectors:
                 raise ValueError(f"Found {len(mat_files)} MAT files but could not match them to stimuli in {manifest_path}")

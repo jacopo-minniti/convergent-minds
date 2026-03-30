@@ -302,14 +302,15 @@ def build_sentence_level_story(
     text: str,
     *,
     alignment_window: int = 1,
-    tokens: Sequence[str] | None = None,
 ) -> dict[str, object]:
     if alignment_window <= 0:
         raise ValueError("alignment_window must be positive.")
     fmri = np.asarray(fmri_vector, dtype=float).reshape(1, -1)
-    token_list = list(tokens) if tokens is not None else simple_tokenize(text)
+    
+    # For sentence-level benchmarks, we treat the entire sentence as a single token 
+    # to maintain a 1:1 mapping with the brain data and avoid group-merging during splits.
     indices = [0] * alignment_window
-    word_nodes = [{"word": token, "additional": indices} for token in token_list]
+    word_nodes = [{"word": text.strip(), "additional": indices}]
     return {"fmri": fmri, "word": word_nodes}
 
 
