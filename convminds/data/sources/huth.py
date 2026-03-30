@@ -128,8 +128,9 @@ class HuthRecordingSource(HumanRecordingSource):
         
         for story in unique_stories:
             resp_path = subject_dir / f"{story}.hf5"
+            logger.info(f"Checking for BOLD data at: {resp_path}")
             if not resp_path.exists():
-                logger.warning(f"Response file not found: {resp_path}")
+                logger.warning(f"Response file not found (or broken symlink): {resp_path}")
                 continue
                 
             with h5py.File(resp_path, "r") as hf:
@@ -160,8 +161,8 @@ class HuthRecordingSource(HumanRecordingSource):
         
         if self.use_cache:
             save_cache("datasets", config=config, payload={
-                "values": stacked_values,
-                "stimulus_ids": all_stim_ids,
+                "values": all_values,
+                "stimulus_ids": all_story_ids,
                 "feature_ids": feature_ids,
                 "metadata": recorded_data.metadata,
             })
