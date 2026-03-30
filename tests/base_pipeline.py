@@ -77,11 +77,18 @@ if __name__ == "__main__":
     logger.info("Setting up DataModule (this may include recording activations)...")
     datamodule.setup()
 
+    # Diagnostic: Check target variance to ensure R2 makes sense
+    all_targets = []
+    for batch in datamodule.train_dataloader():
+        all_targets.append(batch["target_latents"].numpy())
+    all_targets = np.concatenate(all_targets, axis=0)
+    logger.info(f"Target stats (train): mean={all_targets.mean():.4f}, std={all_targets.std():.4f}, var={all_targets.var():.4f}")
+
     model = BrainToGPT2(num_queries=16, llm_dim=768).to(device)
     trainer = cm.trainers.GradientTrainer(model=model, loss_fn=torch.nn.MSELoss(), lr=1e-3)
 
     logger.info("Starting training...")
-    trainer.fit(datamodule.train_dataloader(), target_key="target_latents", epochs=1)
+    trainer.fit(datamodule.train_dataloader(), target_key="target_latents", epochs=20)
 
     model.eval()
     losses = []

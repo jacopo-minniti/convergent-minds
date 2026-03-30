@@ -14,10 +14,11 @@ from convminds.subjects.base import ArtificialSubject
 
 def _resolve_backend():
     try:
-        torch = import_module("torch")
+        import torch
+        import torch.nn as nn
+        return torch, nn
     except ModuleNotFoundError as error:
         raise RuntimeError("HFArtificialSubject.record requires PyTorch to be installed.") from error
-    return torch
 
 
 def _resolve_transformers():
@@ -55,6 +56,7 @@ class HFArtificialSubject(ArtificialSubject):
         layers: Iterable[int | str] | None = None,
         device: str | None = None,
         representation_token_index: int = -1,
+        pooling_strategy: str = "mean",  # Options: "index", "mean", "max"
     ) -> None:
         super().__init__()
         self.model_id = model_id
@@ -62,6 +64,7 @@ class HFArtificialSubject(ArtificialSubject):
         self.layers = list(layers) if layers is not None else None
         self.device = device
         self.representation_token_index = representation_token_index
+        self.pooling_strategy = pooling_strategy
         self._model = None
         self._tokenizer = None
         self._layer_indices = None
@@ -76,6 +79,7 @@ class HFArtificialSubject(ArtificialSubject):
             "trained": self.trained,
             "layers": list(self.layers) if self.layers is not None else None,
             "representation_token_index": self.representation_token_index,
+            "pooling_strategy": self.pooling_strategy,
         }
 
     def _load_model(self):
@@ -109,7 +113,7 @@ class HFArtificialSubject(ArtificialSubject):
         return self._model, self._tokenizer, self._layer_indices
 
     def _extract_group_activations(self, texts: list[str]) -> np.ndarray:
-        torch = _resolve_backend()
+        torch, nn = _resolve_backend()
         model, tokenizer, layer_indices = self._load_model()
 
         activations = []
@@ -123,12 +127,23 @@ class HFArtificialSubject(ArtificialSubject):
                 output = model(**encoded, output_hidden_states=True)
             vectors = []
             for layer_index in layer_indices:
-                hidden_state = output.hidden_states[layer_index + 1]
-                vectors.append(hidden_state[:, self.representation_token_index, :].detach().cpu().numpy().reshape(-1))
+                hidden_state = output.hidden_states[layer_index + 1]  # B, T, D
+                
+                if self.pooling_strategy == "index":
+                    # Take specific token across all items in batch (which is 1 here as we iterate)
+                    rep = hidden_state[:, self.representation_token_index, :]
+                elif self.pooling_strategy == "mean":
+                    rep = hidden_state.mean(dim=1)
+                elif self.pooling_strategy == "max":
+                    rep = hidden_state.max(dim=1).values
+                else:
+                    raise ValueError(f"Unknown pooling_strategy: {self.pooling_strategy}")
+                    
+                vectors.append(rep.detach().cpu().numpy().reshape(-1))
             activations.append(np.concatenate(vectors, axis=0))
         return np.asarray(activations, dtype=float)
 
-    def record(self, benchmark, *, save_cache: bool = False, force: bool = False):
+    def record(self, benchmark, *, normalize: bool = True, save_cache: bool = False, force: bool = False):
         cache_config = {
             "kind": "artificial-activations",
             "subject": self.subject_config(),
@@ -170,9 +185,15 @@ class HFArtificialSubject(ArtificialSubject):
             "layers": list(layer_indices),
             "trained": self.trained,
         }
+        final_values = np.asarray(all_values, dtype=float)
+        if normalize and len(final_values) > 1:
+            mean = np.mean(final_values, axis=0, keepdims=True)
+            std = np.std(final_values, axis=0, keepdims=True)
+            final_values = (final_values - mean) / np.where(std > 0, std, 1.0)
+            
         self._store_recordings(
             benchmark,
-            np.asarray(all_values, dtype=float),
+            final_values,
             stimulus_ids=all_stimulus_ids,
             feature_ids=feature_ids,
             metadata=metadata,
