@@ -86,7 +86,7 @@ class HFArtificialSubject(ArtificialSubject):
         if self._model is not None and self._tokenizer is not None and self._layer_indices is not None:
             return self._model, self._tokenizer, self._layer_indices
 
-        torch = _resolve_backend()
+        torch, nn = _resolve_backend()
         transformers = _resolve_transformers()
         AutoConfig = getattr(transformers, "AutoConfig")
         AutoModelForCausalLM = getattr(transformers, "AutoModelForCausalLM")
