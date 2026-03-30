@@ -123,8 +123,12 @@ class HuthBenchmark(BaseBenchmark):
                 # Fetch story metadata first (small files)
                 logger.info("Fetching Huth metadata (TextGrids/respdict)...")
                 subprocess.run([
+                    "datalad", "get", "-r", "-d", str(self.raw_dir), 
+                    "derivatives/TextGrids"
+                ], check=True)
+                subprocess.run([
                     "datalad", "get", "-d", str(self.raw_dir), 
-                    "derivatives/TextGrids", "derivatives/respdict.json"
+                    "derivatives/respdict.json"
                 ], check=True)
                 
                 # Try both BIDS and Huth-lab naming conventions for BOLD (large files)
@@ -228,6 +232,11 @@ class HuthBenchmark(BaseBenchmark):
                  
             tr_times = np.arange(n_trs) * 2.0
             
+            # Skip if broken symlink (fetch failed)
+            if not tg_path.exists():
+                 logger.warning(f"Stimulus file not found (or broken symlink): {tg_path}")
+                 continue
+
             with open(tg_path, "r") as f:
                 content = f.read()
                 tg = TextGrid(content)
