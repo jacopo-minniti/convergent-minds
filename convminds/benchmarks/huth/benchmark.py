@@ -48,10 +48,14 @@ class HuthBenchmark(BaseBenchmark):
         self.raw_dir = Path(raw_dir or convminds_home() / "data/huth/raw").expanduser()
         self.processed_path = Path(processed_path or convminds_home() / f"data/huth/processed/huth.{subject}.pkl").expanduser()
         
-        # OpenNeuro naming: S1 -> sub-UTS01 (BIDS-compliant 'sub-' prefix)
+        # OpenNeuro naming: S1 -> UTS01 / sub-UTS01. We try both for robustness.
         self.raw_subject = subject
         id_num = int(subject[1:]) if subject.startswith("S") else int(subject.replace("UTS", "").replace("sub-", ""))
-        self.subject = f"sub-UTS{id_num:02d}"
+        self.subject_id = f"UTS{id_num:02d}"
+        self.sub_prefix_id = f"sub-{self.subject_id}"
+        
+        # We will resolve the actual subject directory in ensure_data or prepare_processed
+        self.subject = self.sub_prefix_id # Default
         
         self.trim = trim
         self.window = window
@@ -108,9 +112,15 @@ class HuthBenchmark(BaseBenchmark):
 
             # 3. Recursive 'get' for required data
             try:
+                # Try both BIDS and Huth-lab naming conventions
+                for cand in [self.sub_prefix_id, self.subject_id]:
+                    subprocess.run([
+                        "datalad", "get", "-r", "-d", str(self.raw_dir), 
+                        f"derivatives/preprocessed_data/{cand}", 
+                    ], check=False)
+                
                 subprocess.run([
                     "datalad", "get", "-r", "-d", str(self.raw_dir), 
-                    f"derivatives/preprocessed_data/{self.subject}", 
                     "derivatives/TextGrids",
                     "derivatives/respdict.json"
                 ], check=True)
@@ -145,9 +155,21 @@ class HuthBenchmark(BaseBenchmark):
         """
         logger.info(f"Preparing Huth story-level stimuli for subject {self.subject}...")
         
-        derivatives_dir = self.raw_dir / "derivatives"
-        stim_dir = derivatives_dir / "TextGrids"
-        subject_dir = derivatives_dir / "preprocessed_data" / self.subject
+        # Opportunistically find correctly named subject directory
+        def is_valid_dir(p: Path) -> bool:
+            return p.exists() and any(f.exists() for f in p.glob("*.hf5"))
+            
+        subject_dir = derivatives_dir / "preprocessed_data" / self.sub_prefix_id
+        if not is_valid_dir(subject_dir):
+             alt_dir = derivatives_dir / "preprocessed_data" / self.subject_id
+             if is_valid_dir(alt_dir):
+                  subject_dir = alt_dir
+                  self.subject = self.subject_id 
+             elif alt_dir.exists():
+                  # If alt exists but is empty/broken, still favor it over sub_prefix if sub_prefix was worse
+                  subject_dir = alt_dir
+                  self.subject = self.subject_id
+        
         respdict_path = derivatives_dir / "respdict.json"
         
         with open(respdict_path, "r") as f:
@@ -166,19 +188,32 @@ class HuthBenchmark(BaseBenchmark):
         
         for hf_path in hf5_files:
             story = hf_path.stem
-            tg_path = stim_dir / f"{story}.TextGrid"
+            # Naming normalization to handle hyphen discrepancies (e.g. adventures-in-saying-yes vs adventuresinsayingyes)
+            def normalize(s: str) -> str:
+                return s.replace("-", "").replace("_", "").lower()
             
-            if not tg_path.exists():
-                logger.warning(f"TextGrid not found for story {story} at {tg_path}")
+            norm_story = normalize(story)
+            
+            # Map TextGrids if not cached
+            if not hasattr(self, "_tg_mapping"):
+                 self._tg_mapping = {normalize(p.stem): p for p in stim_dir.glob("*.TextGrid")}
+            
+            tg_path = self._tg_mapping.get(norm_story)
+            
+            if not tg_path:
+                logger.warning(f"TextGrid not found for story {story} (normalized: {norm_story})")
                 continue
                 
-            # TR timing: generate from respdict counts (TR=2.0s)
-            if story not in respdict:
-                 logger.warning(f"Story {story} not found in respdict.json. Guessing length from HDF5.")
-                 with h5py.File(hf_path, "r") as f:
-                      n_trs = f["data"].shape[0]
+            # Story TR count from respdict (also normalized)
+            if not hasattr(self, "_respdict_norm"):
+                 self._respdict_norm = {normalize(k): v for k, v in respdict.items()}
+            
+            if norm_story not in self._respdict_norm:
+                  logger.warning(f"Story {story} not found in respdict.json. Guessing length from HDF5.")
+                  with h5py.File(hf_path, "r") as f:
+                       n_trs = f["data"].shape[0]
             else:
-                 n_trs = respdict[story]
+                  n_trs = self._respdict_norm[norm_story]
                  
             tr_times = np.arange(n_trs) * 2.0
             

@@ -91,14 +91,29 @@ class HuthRecordingSource(HumanRecordingSource):
         """
         import torch
         subject_orig = selector.get("subject", "S1") if selector else "S1"
-        # OpenNeuro naming: S1 -> sub-UTS01 (BIDS-compliant 'sub-' prefix)
         id_num = int(subject_orig[1:]) if subject_orig.startswith("S") else int(subject_orig.replace("UTS", "").replace("sub-", ""))
-        subject = f"sub-UTS{id_num:02d}"
-            
-        # 1. Resolve response files
-        derivatives_path = self.ds_root / "derivatives"
-        subject_dir = derivatives_path / "preprocessed_data" / subject
         
+        # OpenNeuro naming: S1 -> UTS01 / sub-UTS01. Try both.
+        derivatives_path = self.ds_root / "derivatives"
+        sub_id = f"sub-UTS{id_num:02d}"
+        uts_id = f"UTS{id_num:02d}"
+        
+        # Identify non-empty/non-broken directory
+        def is_valid_dir(p: Path) -> bool:
+            return p.exists() and any(f.exists() for f in p.glob("*.hf5"))
+            
+        subject_dir = derivatives_path / "preprocessed_data" / sub_id
+        subject = sub_id
+        if not is_valid_dir(subject_dir):
+             alt_dir = derivatives_path / "preprocessed_data" / uts_id
+             if is_valid_dir(alt_dir):
+                  subject_dir = alt_dir
+                  subject = uts_id
+             elif alt_dir.exists():
+                  # Fallback to the one that exists even if broken (gives better error msg later)
+                  subject_dir = alt_dir
+                  subject = uts_id
+            
         stories = [s.stimulus_id for s in benchmark.stimuli] # Stimulus ID holds the story name
         unique_stories = sorted(list(set(stories)))
         
