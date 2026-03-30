@@ -151,8 +151,8 @@ cache
 .venv/
 .logs/
 .jobs/
-.huggingface
-.convminds
+.hf-home
+.convminds-home
 
 wandb/
 **/models/lm1b/resources
