@@ -212,46 +212,6 @@ class HuthBenchmark(BaseBenchmark):
                 "story": story,
                 "metadata": rec.metadata
             })
-            if not tg_path.exists():
-                logger.warning(f"TextGrid not found for story {story} at {tg_path}")
-                continue
-                
-            with open(tg_path, "r") as f:
-                content = f.read()
-                tg = TextGrid(content)
-                
-            word_tier = tg.get_tier("words")
-            if not word_tier:
-                logger.warning(f"No 'words' tier found in {story}.TextGrid")
-                continue
-            
-            # Extract word events
-            intervals = word_tier["intervals"]
-            
-            # Metadata holds the timing for later alignment
-            metadata = {
-                "tr_times": tr_times,
-                "word_intervals": intervals,
-                "n_trs": len(tr_times)
-            }
-            
-            # Standard 'text' is the whole transcript
-            full_text = " ".join([i["text"] for i in intervals if i["text"].strip()])
-            
-            rec = StimulusRecord(
-                stimulus_id=story,
-                text=full_text,
-                topic=story,
-                metadata=metadata
-            )
-            records.append(rec)
-            rows.append({
-                "stimulus_id": rec.stimulus_id,
-                "text": rec.text,
-                "story": story,
-                "metadata": rec.metadata
-            })
-
         # Cache the rows for faster reload
         self.processed_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_pickle(self.processed_path)
