@@ -99,19 +99,27 @@ class HuthBenchmark(BaseBenchmark):
         if not (derivatives_dir / "preprocessed_data").exists() or not (derivatives_dir / "TextGrids").exists():
             logger.info("Fetching derivatives via DataLad...")
             
-            # 2. Reset annex-ignore (common pitfall on clones)
-            logger.info("Verifying remote annex configuration...")
-            subprocess.run(["git", "config", "remote.origin.annex-ignore", "false"], cwd=str(self.raw_dir), check=False)
+            # --- AGGRESSIVE RECOVERY LOGIC (CLUSTER-FRIENDLY) ---
+            dataset_root = str(self.raw_dir)
+            def run_git(args, check=False):
+                return subprocess.run(["git"] + args, cwd=dataset_root, check=check, capture_output=True, text=True)
             
-            # 3. Enable S3 Siblings (required for ds003020 content)
-            logger.info("Enabling S3 backup siblings for data content...")
-            for sibling in ["s3-BACKUP", "s3-PUBLIC"]:
-                subprocess.run(["datalad", "siblings", "enable", "-s", sibling], cwd=str(self.raw_dir), check=False, capture_output=True)
+            def run_datalad(args, check=False):
+                return subprocess.run(["datalad"] + args, cwd=dataset_root, check=check, capture_output=True, text=True)
 
-            # 4. Recursive 'get' for required data (executed from dataset root)
+            logger.info("Forcing S3 mirror connectivity...")
+            # 1. Reset any 'annex-ignore' blocks
+            run_git(["config", "remote.origin.annex-ignore", "false"])
+            run_git(["config", "--unset", "remote.origin.annex-ignore"])
+            
+            # 2. Directly enable S3 mirrors (OpenNeuro's names)
+            run_git(["annex", "enableremote", "s3-PUBLIC"])
+            run_git(["annex", "enableremote", "s3-BACKUP"])
+            
+            # 3. Recursive 'get' for required data (executed from dataset root)
             try:
                 # Ensure we have git identity else datalad fails (common on new clusters)
-                res = subprocess.run(["git", "config", "--global", "user.email"], capture_output=True, text=True)
+                res = run_git(["config", "--global", "user.email"])
                 if not res.stdout.strip():
                     logger.info("Setting temporary git identity for DataLad...")
                     subprocess.run(["git", "config", "--global", "user.email", "convminds@google.com"], check=False)
@@ -119,15 +127,19 @@ class HuthBenchmark(BaseBenchmark):
 
                 # Fetch story metadata first (small files)
                 logger.info("Fetching Huth metadata (TextGrids/respdict)...")
-                subprocess.run(["datalad", "get", "-r", "derivatives/TextGrids"], cwd=str(self.raw_dir), check=True)
-                subprocess.run(["datalad", "get", "derivatives/respdict.json"], cwd=str(self.raw_dir), check=True)
+                run_datalad(["get", "-r", "derivatives/TextGrids"], check=True)
+                run_datalad(["get", "derivatives/respdict.json"], check=True)
                 
                 # Fetch BOLD data for both possible candidate folders
                 for cand in [self.sub_prefix_id, self.subject_id]:
                     logger.info(f"Fetching BOLD data for {cand}...")
-                    subprocess.run([
-                        "datalad", "get", "-r", f"derivatives/preprocessed_data/{cand}"
-                    ], cwd=str(self.raw_dir), check=False)
+                    # We try multiple sources explicitly if they didn't automount
+                    p = f"derivatives/preprocessed_data/{cand}"
+                    run_datalad(["get", "-r", p], check=False)
+                    # If that failed, try forcing the source
+                    if not (self.raw_dir / p).exists():
+                         run_datalad(["get", "-r", "--source", "s3-PUBLIC", p], check=False)
+                         run_datalad(["get", "-r", "--source", "s3-BACKUP", p], check=False)
             except subprocess.CalledProcessError as e:
                 logger.warning(f"DataLad get attempt failed: {e}")
                 if not (self.raw_dir / "derivatives/respdict.json").exists():
