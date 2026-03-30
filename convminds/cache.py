@@ -14,6 +14,21 @@ def convminds_home() -> Path:
     return Path(home).expanduser()
 
 
+def hf_home() -> Path:
+    home = os.environ.get("HF_HOME", "~/.cache/huggingface")
+    return Path(home).expanduser()
+
+
+def file_signature(path: Path) -> dict[str, Any]:
+    """Returns a dictionary representing a file's path, size, and modification time."""
+    stat = path.stat()
+    return {
+        "path": str(path),
+        "size": int(stat.st_size),
+        "mtime": int(stat.st_mtime),
+    }
+
+
 def ensure_cache_dir(namespace: str) -> Path:
     path = convminds_home() / namespace
     try:

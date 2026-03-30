@@ -8,7 +8,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-from convminds.cache import load_cache, save_cache as save_cache_payload
+from convminds.cache import load_cache, save_cache as save_cache_payload, hf_home
 from convminds.subjects.base import ArtificialSubject
 
 
@@ -93,12 +93,13 @@ class HFArtificialSubject(ArtificialSubject):
         AutoTokenizer = getattr(transformers, "AutoTokenizer")
 
         logger.info(f"Loading {self.model_id} from Hugging Face...")
-        config = AutoConfig.from_pretrained(self.model_id)
+        cdir = str(hf_home())
+        config = AutoConfig.from_pretrained(self.model_id, cache_dir=cdir)
         if self.trained:
-            model = AutoModelForCausalLM.from_pretrained(self.model_id)
+            model = AutoModelForCausalLM.from_pretrained(self.model_id, cache_dir=cdir)
         else:
             model = AutoModelForCausalLM.from_config(config)
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id, cache_dir=cdir)
         if getattr(tokenizer, "pad_token", None) is None and getattr(tokenizer, "eos_token", None) is not None:
             tokenizer.pad_token = tokenizer.eos_token
 
