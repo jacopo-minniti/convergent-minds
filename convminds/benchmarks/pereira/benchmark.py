@@ -11,7 +11,8 @@ from convminds.benchmarks.base import BaseBenchmark
 from convminds.data.sources.pereira import PereiraRecordingSource, load_mat_brain_data
 from convminds.data.alignment import build_sentence_level_dataset
 from convminds.interfaces import SplitConfig, StimulusRecord, StimulusSet
-from convminds.cache import write_pickle
+from convminds.cache import write_pickle, convminds_home
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,8 @@ class PereiraBenchmark(BaseBenchmark):
         alignment_window: int = 4,
         reduce: str = "mean",
     ) -> None:
-        raw_dir = Path(raw_dir or ".cache/data/pereira/raw").expanduser()
-        processed_path = Path(processed_path or f".cache/data/pereira/processed/pereira.{atlas_key}.wq.pkl.dic").expanduser()
+        raw_dir = Path(raw_dir or convminds_home() / "data/pereira/raw").expanduser()
+        processed_path = Path(processed_path or convminds_home() / f"data/pereira/processed/pereira.{atlas_key}.wq.pkl.dic").expanduser()
         
         self.raw_dir = raw_dir
         self.processed_path = processed_path
@@ -133,7 +134,7 @@ class PereiraBenchmark(BaseBenchmark):
         This is a PRELIMINARY step that is dataset-specific.
         """
         raw_dir = Path(raw_dir).expanduser()
-        output_path = Path(output_path or ".cache/data/pereira/processed/pereira.processed.pkl.dic").expanduser()
+        output_path = Path(output_path or convminds_home() / "data/pereira/processed/pereira.processed.pkl.dic").expanduser()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Preparing preliminary processed data for Pereira: {output_path.name}...")
