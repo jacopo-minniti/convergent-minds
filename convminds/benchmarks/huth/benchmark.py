@@ -106,6 +106,7 @@ class HuthBenchmark(BaseBenchmark):
             except Exception: pass
             
             # 2. Enable S3 Sibling (required for ds003020 files)
+            logger.info("Enabling S3 backup sibling for data content...")
             try:
                 subprocess.run(["datalad", "siblings", "-d", str(self.raw_dir), "enable", "-s", "s3-BACKUP"], check=False)
             except Exception: pass
@@ -162,7 +163,8 @@ class HuthBenchmark(BaseBenchmark):
         Extracts story-level transcripts and TR timing.
         Returns one StimulusRecord per story.
         """
-        logger.info(f"Preparing Huth story-level stimuli for subject {self.subject}...")
+        derivatives_dir = self.raw_dir / "derivatives"
+        stim_dir = derivatives_dir / "TextGrids"
         
         # Opportunistically find correctly named subject directory
         def is_valid_dir(p: Path) -> bool:
