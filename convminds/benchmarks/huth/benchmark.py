@@ -99,19 +99,16 @@ class HuthBenchmark(BaseBenchmark):
         if not (derivatives_dir / "preprocessed_data").exists() or not (derivatives_dir / "TextGrids").exists():
             logger.info("Fetching derivatives via DataLad...")
             
-            # --- SELF-HEALING LOGIC FOR OPENNEURO ---
-            # 1. Reset annex-ignore (common pitfall on clones)
-            try:
-                subprocess.run(["git", "-C", str(self.raw_dir), "config", "remote.origin.annex-ignore", "false"], check=False)
-            except Exception: pass
+            # 2. Reset annex-ignore (common pitfall on clones)
+            logger.info("Verifying remote annex configuration...")
+            subprocess.run(["git", "config", "remote.origin.annex-ignore", "false"], cwd=str(self.raw_dir), check=False)
             
-            # 2. Enable S3 Sibling (required for ds003020 files)
-            logger.info("Enabling S3 backup sibling for data content...")
-            try:
-                subprocess.run(["datalad", "siblings", "-d", str(self.raw_dir), "enable", "-s", "s3-BACKUP"], check=False)
-            except Exception: pass
+            # 3. Enable S3 Siblings (required for ds003020 content)
+            logger.info("Enabling S3 backup siblings for data content...")
+            for sibling in ["s3-BACKUP", "s3-PUBLIC"]:
+                subprocess.run(["datalad", "siblings", "enable", "-s", sibling], cwd=str(self.raw_dir), check=False, capture_output=True)
 
-            # 3. Recursive 'get' for required data
+            # 4. Recursive 'get' for required data (executed from dataset root)
             try:
                 # Ensure we have git identity else datalad fails (common on new clusters)
                 res = subprocess.run(["git", "config", "--global", "user.email"], capture_output=True, text=True)
@@ -122,25 +119,17 @@ class HuthBenchmark(BaseBenchmark):
 
                 # Fetch story metadata first (small files)
                 logger.info("Fetching Huth metadata (TextGrids/respdict)...")
-                subprocess.run([
-                    "datalad", "get", "-r", "-d", str(self.raw_dir), 
-                    "derivatives/TextGrids"
-                ], check=True)
-                subprocess.run([
-                    "datalad", "get", "-d", str(self.raw_dir), 
-                    "derivatives/respdict.json"
-                ], check=True)
+                subprocess.run(["datalad", "get", "-r", "derivatives/TextGrids"], cwd=str(self.raw_dir), check=True)
+                subprocess.run(["datalad", "get", "derivatives/respdict.json"], cwd=str(self.raw_dir), check=True)
                 
-                # Try both BIDS and Huth-lab naming conventions for BOLD (large files)
+                # Fetch BOLD data for both possible candidate folders
                 for cand in [self.sub_prefix_id, self.subject_id]:
                     logger.info(f"Fetching BOLD data for {cand}...")
                     subprocess.run([
-                        "datalad", "get", "-r", "-d", str(self.raw_dir), 
-                        f"derivatives/preprocessed_data/{cand}"
-                    ], check=False)
+                        "datalad", "get", "-r", f"derivatives/preprocessed_data/{cand}"
+                    ], cwd=str(self.raw_dir), check=False)
             except subprocess.CalledProcessError as e:
                 logger.warning(f"DataLad get attempt failed: {e}")
-                # We only raise if the metadata is still missing after the attempt
                 if not (self.raw_dir / "derivatives/respdict.json").exists():
                      msg = f"Missing Huth metadata ({self.raw_dir / 'derivatives/respdict.json'}). Please verify internet access or run on a login node."
                      logger.error(msg)
