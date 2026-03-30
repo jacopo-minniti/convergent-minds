@@ -114,7 +114,7 @@ def build_sentence_level_dataset(
 
 def build_word_aligned_dataset(
     stories: Iterable[tuple[str, np.ndarray, Sequence[TokenEvent]]],
-    **,
+    *,
     tr: float,
     **kwargs
 ) -> dict[str, dict[str, object]]:

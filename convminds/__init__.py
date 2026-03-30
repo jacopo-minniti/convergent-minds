@@ -11,7 +11,7 @@ _LAZY_SUBMODULES = {
     "models",
     "trainers",
     "objectives",
-    "recipes",
+    "pipelines",
 }
 
 
@@ -36,7 +36,7 @@ __all__ = [
     "models",
     "trainers",
     "objectives",
-    "recipes",
+    "pipelines",
     "benchmarks",
     "subjects",
 ]

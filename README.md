@@ -2,13 +2,13 @@
   <img src="logo.png" alt="Convergent Minds Logo" width="75%">
 </p>
 
-**Convergent Minds** (`convminds`) is a PyTorch-native framework for aligning biological brain activity with Large Language Models (LLMs). It provides standardized neuro-components, leakage-safe data flows, and end-to-end recipes to replicate state-of-the-art research in brain-to-text decoding.
+**Convergent Minds** (`convminds`) is a PyTorch-native framework for aligning biological brain activity with Large Language Models (LLMs). It provides standardized neuro-components, leakage-safe data flows, and end-to-end pipelines to replicate state-of-the-art research in brain-to-text decoding.
 
 ## Core Philosophy: The Physics and the Engine
 `convminds` separates **mathematical mechanisms** from **architectural routing**:
 - **`cm.nn`**: Generic neural building blocks (Encoders, Adapters, Wrappers).
 - **`cm.models`**: Assembled architectures that wire `cm.nn` blocks into LLM backbones.
-- **`cm.recipes`**: High-level replications that match specific papers end-to-end.
+- **`cm.pipelines`**: High-level replications that match specific papers end-to-end.
 - **`cm.data`**: Primitives that enforce biological constraints (e.g., preserving 3D coordinates and preventing data leakage).
 
 ---
@@ -109,15 +109,15 @@ datamodule = cm.data.BrainDataModule(
 
 ---
 
-## Recipes: One-Liner Replications
-Replicate top papers instantly using standardized `cm.recipes`. These classes encapsulate the exact dataset, model, and training curriculum described in the literature.
+## Pipelines: One-Liner Replications
+Replicate top papers instantly using standardized `cm.pipelines`. These classes encapsulate the exact dataset, model, and training curriculum described in the literature.
 
 ```python
-from convminds.recipes import MindLLM
+from convminds.pipelines import MindLLM
 
-recipe = MindLLM(benchmark=benchmark, subject_id=1, llm_id="lmsys/vicuna-7b-v1.5")
-recipe.train()
-recipe.evaluate()
+pipeline = MindLLM(benchmark=benchmark, subject_id=1, llm_id="lmsys/vicuna-7b-v1.5")
+pipeline.train()
+pipeline.evaluate()
 ```
 
 ---

@@ -79,10 +79,42 @@ class PereiraBenchmark(BaseBenchmark):
         raw_dir = Path(self.raw_dir)
         output_path = Path(self.processed_path)
         
-        if not raw_dir.exists():
-            logger.info("Pereira raw data not found. Attempting download...")
-            from scripts.download_pereira_data import download_pereira
-            download_pereira(raw_dir)
+        if not raw_dir.exists() or not any(raw_dir.iterdir()):
+            logger.info("Pereira raw data not found. Commencing automated download...")
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 1. Materials & Stimuli
+            materials = {
+                "IARPA_expt1_stim_images.zip": "https://www.dropbox.com/s/4bi7e7rds8thg11/IARPA_expt1_stim_images.zip?dl=1",
+                "IARPA_expt1_stim_sents.zip": "https://www.dropbox.com/s/eughbv6dgrk05yf/IARPA_expt1_stim_sents.zip?dl=1",
+                "IARPA_expt2_stim.zip": "https://www.dropbox.com/s/s4ulonvo4y1lj1x/IARPA_expt2_stim.zip?dl=1",
+                "IARPA_expt3_stim.zip": "https://www.dropbox.com/s/kjs6s09w2py93o5/IARPA_expt3_stim.zip?dl=1",
+                "DMN_overlap_n60.zip": "https://www.dropbox.com/s/obbx7mgmzd8t3h2/DMN_overlap_n60.zip?dl=1",
+                "voxelInform_FractionMNI.nii": "https://www.dropbox.com/s/gmiubb0p73ushm3/voxelInform_FractionMNI.nii?dl=1",
+            }
+            import subprocess
+            for name, url in materials.items():
+                dest = raw_dir / name
+                if not dest.exists():
+                    logger.info(f"Downloading {name}...")
+                    subprocess.run(["curl", "-L", "-o", str(dest), url], check=True)
+
+            # 2. Subject activations (several GBs)
+            subjects_url = "https://www.dropbox.com/sh/5z1ikn8osaao57w/AABg9LIlJfEOrQgZN7Sj7WHRa?dl=1"
+            subjects_zip = raw_dir / "pereira_subjects_all.zip"
+            if not subjects_zip.exists():
+                logger.info("Downloading all subject brain data (~several GBs)...")
+                subprocess.run(["curl", "-L", "-o", str(subjects_zip), subjects_url], check=True)
+
+            # 3. Extraction
+            import zipfile, tarfile
+            logger.info("Extracting archives...")
+            for zip_path in raw_dir.glob("*.zip"):
+                with zipfile.ZipFile(zip_path, "r") as ref:
+                    ref.extractall(raw_dir)
+            for tar_path in raw_dir.rglob("*.tar"):
+                with tarfile.open(tar_path, "r") as ref:
+                    ref.extractall(raw_dir)
             
         self.prepare_processed(raw_dir, output_path=output_path, **kwargs)
 

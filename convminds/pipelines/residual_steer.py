@@ -23,9 +23,9 @@ class _BoundPenalizedLoss:
         return self.loss_fn(outputs, labels, penalty)
 
 
-class ResidualSteerRecipe:
+class ResidualSteerPipeline:
     """
-    End-to-end replication recipe for the ResidualSteerLM.
+    End-to-end replication pipeline for the ResidualSteerLM.
     Two-stage training: MSE warm-up on the encoder, then end-to-end generation training
     with the localized injection norm penalty.
     """
@@ -42,7 +42,7 @@ class ResidualSteerRecipe:
         lambda_weight: float = 1.0,
     ):
         if benchmark is None:
-            raise ValueError("ResidualSteerRecipe requires an explicit benchmark instance.")
+            raise ValueError("ResidualSteerPipeline requires an explicit benchmark instance.")
 
         self.subject_id = subject_id
         self.llm_id = llm_id
