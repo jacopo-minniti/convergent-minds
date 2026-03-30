@@ -309,6 +309,8 @@ class BrainDataModule:
             rois=rois,
         )
 
+        self._fit_stateful_transforms(train_dataset)
+        self._train_dataset = _TransformedDataset(train_dataset, self._apply_transforms)
         self._test_dataset = _TransformedDataset(test_dataset, self._apply_transforms)
         
         logger.info(f"DataModule Setup Complete: Train={len(train_dataset)}, Test={len(test_dataset)}")
