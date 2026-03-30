@@ -150,11 +150,16 @@ class HuthBenchmark(BaseBenchmark):
             respdict = json.load(f)
             
         if self.subject not in respdict:
-             # Fallback: maybe it's keyed by S1..S8 in respdict? 
-             # Let's check for UTS01 and raw_subject
-             alt_key = self.raw_subject if self.raw_subject in respdict else None
+             # Try all variants: sub-UTS01, UTS01, S1
+             variants = [self.datalad_subject, self.subject, self.raw_subject]
+             alt_key = next((v for v in variants if v in respdict), None)
+             
              if not alt_key:
-                  raise ValueError(f"Subject {self.subject} (nor {self.raw_subject}) not found in respdict.json")
+                  available_keys = list(respdict.keys())[:5]
+                  msg = (f"Subject ID variations {variants} not found in respdict.json. "
+                         f"Available keys (first 5): {available_keys}")
+                  logger.error(msg)
+                  raise ValueError(msg)
              subject_stories = respdict[alt_key]
         else:
              subject_stories = respdict[self.subject]
