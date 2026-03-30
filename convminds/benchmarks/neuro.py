@@ -61,6 +61,15 @@ def download_osf(project_id: str, output_dir: str | Path) -> Path:
     return output_path
 
 
+def download_url(url: str, output_path: str | Path) -> Path:
+    output_path = Path(output_path).expanduser().resolve()
+    logger.info(f"Downloading {url} -> {output_path}")
+    # Use curl for better reliability and redirect handled correctly
+    cmd = ["curl", "-L", "-o", str(output_path), url]
+    subprocess.run(cmd, check=False)
+    return output_path
+
+
 def _stimulus_set_from_serialized(payload: Sequence[Mapping[str, Any]]) -> StimulusSet:
     return StimulusSet(records=[StimulusRecord(**dict(item)) for item in payload])
 
@@ -492,29 +501,38 @@ class PereiraBenchmark(NeuroBenchmark):
             if processed_path.exists():
                 return
             
-            # If the raw directory already has plenty of files, skip the slow OSF check
-            if raw_dir.exists():
-                logger.info(f"Checking raw directory: {raw_dir}")
-                has_files = False
-                try:
-                    for _ in raw_dir.iterdir():
-                        has_files = True
-                        break
-                except OSError:
-                    pass
-                
-                if has_files:
-                    logger.info("Raw directory found and contains files. Skipping OSF check.")
-                else:
-                    logger.info("Raw directory is empty or missing. Starting OSF download...")
-                    raw_dir.mkdir(parents=True, exist_ok=True)
-                    download_osf(spec.dataset_id, raw_dir)
-            else:
-                logger.info(f"Raw directory {raw_dir} does not exist. Creating and downloading...")
-                raw_dir.mkdir(parents=True, exist_ok=True)
-                download_osf(spec.dataset_id, raw_dir)
+            raw_dir.mkdir(parents=True, exist_ok=True)
             
-            logger.info("Preparing processed data (this may involve NIfTI flattening and PCA)...")
+            # --- Integrated Pereira Data Acquisition ---
+            # 1. Subject Activation Data (The large several GB files)
+            # Link for the WHOLE folder of subject data (from Dropbox link provided)
+            subjects_url = "https://www.dropbox.com/sh/5z1ikn8osaao57w/AABg9LIlJfEOrQgZN7Sj7WHRa?dl=1"
+            subjects_zip = raw_dir / "pereira_subjects.zip"
+            if not subjects_zip.exists() and not list(raw_dir.rglob("*.mat")):
+                 logger.info("Subject brain data missing. Commencing large download...")
+                 download_url(subjects_url, subjects_zip)
+
+            # 2. Materials (Stimuli, manifests, ROIs)
+            materials = {
+                "IARPA_expt1_stim_images.zip": "https://www.dropbox.com/s/4bi7e7rds8thg11/IARPA_expt1_stim_images.zip?dl=1",
+                "IARPA_expt1_stim_sents.zip": "https://www.dropbox.com/s/eughbv6dgrk05yf/IARPA_expt1_stim_sents.zip?dl=1",
+                "IARPA_expt2_stim.zip": "https://www.dropbox.com/s/s4ulonvo4y1lj1x/IARPA_expt2_stim.zip?dl=1",
+                "IARPA_expt3_stim.zip": "https://www.dropbox.com/s/kjs6s09w2py93o5/IARPA_expt3_stim.zip?dl=1",
+                "DMN_overlap_n60.zip": "https://www.dropbox.com/s/obbx7mgmzd8t3h2/DMN_overlap_n60.zip?dl=1",
+                "voxelInform_FractionMNI.nii": "https://www.dropbox.com/s/gmiubb0p73ushm3/voxelInform_FractionMNI.nii?dl=1",
+            }
+            
+            for name, url in materials.items():
+                dest = raw_dir / name
+                if not dest.exists():
+                    logger.info(f"Downloading material: {name}")
+                    download_url(url, dest)
+            
+            logger.info("Ensuring all archives are extracted...")
+            # We don't perform the extraction here anymore, we let prepare_processed handle it
+            # since it has a sophisticated nested-zip extraction loop.
+            
+            logger.info("Preparing processed data (this may involve NIfTI/MAT flattening and PCA)...")
             PereiraBenchmark.prepare_processed(
                 raw_dir,
                 output_path=processed_path,
@@ -564,31 +582,37 @@ class PereiraBenchmark(NeuroBenchmark):
         
         logger.info("Scanning for zip files to extract...")
 
-        # 1. Recursive extraction loop (handles nested zips)
-        logger.info(f"Checking for archives in {raw_dir}...")
-        processed_zips = set()
+        import zipfile
+        import tarfile
         
-        # We allow up to 3 levels of nested zips to be safe but avoid infinite loops
+        # 1. Recursive extraction loop (handles nested zips and tars)
+        logger.info(f"Checking for archives in {raw_dir}...")
+        processed_archives = set()
+        
+        # We allow up to 3 levels of nested archives to be safe
         for depth in range(3):
-            zip_files = [p for p in raw_dir.rglob("*.zip") if str(p) not in processed_zips]
-            if not zip_files:
+            archives = [p for p in raw_dir.rglob("*") if p.suffix in [".zip", ".tar"] and str(p) not in processed_archives]
+            if not archives:
                 break
             
-            import zipfile
-            logger.info(f"Extraction pass {depth+1}: Found {len(zip_files)} archives")
-            for zip_path in zip_files:
-                processed_zips.add(str(zip_path))
-                # Check if it looks already extracted by looking for a directory with the same stem
-                target_dir = zip_path.parent / zip_path.stem
+            logger.info(f"Extraction pass {depth+1}: Found {len(archives)} archives")
+            for archive_path in archives:
+                processed_archives.add(str(archive_path))
+                # Check if it looks already extracted
+                target_dir = archive_path.parent / archive_path.stem
                 if target_dir.exists() and any(target_dir.iterdir()):
                     continue
                 
-                logger.info(f"  -> Extracting {zip_path.name}...")
+                logger.info(f"  -> Extracting {archive_path.name}...")
                 try:
-                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                        zip_ref.extractall(zip_path.parent)
-                except (zipfile.BadZipFile, PermissionError, OSError) as e:
-                    logger.error(f"  !! Failed to extract {zip_path.name}: {e}")
+                    if archive_path.suffix == ".zip":
+                        with zipfile.ZipFile(archive_path, "r") as ref:
+                            ref.extractall(archive_path.parent)
+                    elif archive_path.suffix == ".tar":
+                        with tarfile.open(archive_path, "r") as ref:
+                            ref.extractall(archive_path.parent)
+                except Exception as e:
+                    logger.error(f"  !! Failed to extract {archive_path.name}: {e}")
                     continue
         
         logger.info("Archive processing complete.")
@@ -601,48 +625,100 @@ class PereiraBenchmark(NeuroBenchmark):
 
         # 3. Comprehensive Brain Data Scan
         nifti_files = sorted(list(raw_dir.rglob("*.nii*")))
-        logger.info(f"Detected {len(nifti_files)} NIfTI data files in {raw_dir}")
+        mat_files = sorted(list(raw_dir.rglob("examples_*.mat")))
+        logger.info(f"Detected {len(nifti_files)} NIfTI files and {len(mat_files)} Pereira MAT data files in {raw_dir}")
+        
         nifti_map = {p.stem: p for p in nifti_files}
 
-        vectors: list[np.ndarray] = []
-        metadata: list[tuple[str, str]] = []
-        
-        for index, row in df.iterrows():
-            stimulus_id = str(row[id_col])
-            text = str(row[text_col])
+        if mat_files:
+            logger.info(f"Processing {len(mat_files)} MATLAB files...")
+            # MATLAB Pereira format: One file contains all stimuli for a participant
+            all_matrices = []
+            all_metadata = []
             
-            # Resolve beta path
-            beta_path = None
-            if beta_col and row[beta_col] and str(row[beta_col]) != "None":
-                beta_path = raw_dir / str(row[beta_col])
-            
-            if not beta_path or not beta_path.exists():
-                # Matching Strategy: stem match, text match, or index match
-                beta_path = (
-                    nifti_map.get(stimulus_id) 
-                    or nifti_map.get(text[:30])
-                    or (nifti_files[index] if index < len(nifti_files) else None)
-                )
-            
-            if not beta_path or not beta_path.exists():
-                continue
+            for mat_path in mat_files:
+                import scipy.io as sio
+                mat = sio.loadmat(str(mat_path))
+                if "examples" not in mat:
+                    continue
+                
+                examples = mat["examples"] # (n_stim, n_voxels)
+                # Determine stimulus identifier key
+                # Expt 1: keyConcept (180x1)
+                # Expt 2/3: labelsSentences (384x1) or keySentences
+                id_keys = ["keyConcept", "labelsSentences", "keySentences", "labelsConcept"]
+                ids = None
+                for k in id_keys:
+                    if k in mat:
+                        ids = mat[k]
+                        break
+                
+                if ids is None:
+                    # Guess by row count if known
+                    if examples.shape[0] == 180: ids = np.arange(180)
+                    elif examples.shape[0] == 384: ids = np.arange(384)
+                    elif examples.shape[0] == 243: ids = np.arange(243)
+                    else: continue
+                
+                # Flatten mat ids to strings
+                ids = [str(id[0][0] if isinstance(id[0], (list, np.ndarray)) else id[0]) for id in ids]
+                
+                # Match these IDs to the manifest to get text
+                for i, stim_id in enumerate(ids):
+                    # Find matching row in manifest
+                    match = df[df[id_col].astype(str).str.contains(stim_id)]
+                    if match.empty:
+                        # try stem match or fuzzy
+                        match = df[df[id_col].astype(str) == stim_id]
+                    
+                    if not match.empty:
+                        text = str(match.iloc[0][text_col])
+                        all_matrices.append(examples[i])
+                        all_metadata.append((stim_id, text))
 
-            try:
-                matrix, _ = flatten_nifti(beta_path)
-            except Exception:
-                continue
-            vector = matrix.mean(axis=0)
-            vectors.append(vector)
-            metadata.append((stimulus_id, text))
+            if not all_matrices:
+                raise ValueError(f"Found {len(mat_files)} MAT files but could not match them to stimuli in {manifest_path}")
+
+            vectors = all_matrices
+            metadata = all_metadata
+        else:
+            # Traditional NIfTI code path
+            for index, row in df.iterrows():
+                stimulus_id = str(row[id_col])
+                text = str(row[text_col])
+                
+                # Resolve beta path
+                beta_path = None
+                if beta_col and row[beta_col] and str(row[beta_col]) != "None":
+                    beta_path = raw_dir / str(row[beta_col])
+                
+                if not beta_path or not beta_path.exists():
+                    # Matching Strategy: stem match, text match, or index match
+                    beta_path = (
+                        nifti_map.get(stimulus_id) 
+                        or nifti_map.get(text[:30])
+                        or (nifti_files[index] if index < len(nifti_files) else None)
+                    )
+                
+                if not beta_path or not beta_path.exists():
+                    continue
+
+                try:
+                    matrix, _ = flatten_nifti(beta_path)
+                except Exception:
+                    continue
+                vector = matrix.mean(axis=0)
+                vectors.append(vector)
+                metadata.append((stimulus_id, text))
 
         if not vectors:
-            raise ValueError(f"No beta maps found in manifest {manifest_path}.")
+            raise ValueError(f"No brain data found matching manifest {manifest_path}.")
 
         stacked = np.asarray(vectors, dtype=float)
         reduced, _ = apply_pca(stacked, n_components=n_components)
 
         payload = build_sentence_level_dataset(
-            ((stimulus_id, reduced[index], text) for index, (stimulus_id, text) in enumerate(metadata)),
+            ((stim_id, reduced[idx], stim_text) for idx, (stim_id, stim_text) in enumerate(metadata)),
             alignment_window=alignment_window,
         )
         write_pickle(output_path, payload)

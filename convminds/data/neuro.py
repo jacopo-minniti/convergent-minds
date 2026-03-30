@@ -16,6 +16,14 @@ def _require_nibabel():
     return nib
 
 
+def _require_scipy():
+    try:
+        import scipy.io as sio
+    except ModuleNotFoundError as error:
+        raise RuntimeError("scipy is required for MATLAB (.mat) loading. Install it via pip.") from error
+    return sio
+
+
 def _require_pandas():
     try:
         import pandas as pd
@@ -76,8 +84,11 @@ def flatten_nifti(
     if isinstance(image, np.ndarray):
         data = image
     else:
+        path = Path(image).expanduser()
+        if path.suffix == ".mat":
+            return load_mat_brain_data(path)
         nib = _require_nibabel()
-        img = nib.load(str(Path(image).expanduser()))
+        img = nib.load(str(path))
         data = np.asarray(img.get_fdata())
 
     if data.ndim == 3:
@@ -98,6 +109,36 @@ def flatten_nifti(
     voxel_series = data[mask_data]
     matrix = voxel_series.T
     return matrix.astype(float), coords.astype(float)
+
+
+def load_mat_brain_data(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    sio = _require_scipy()
+    path = Path(path).expanduser()
+    mat = sio.loadmat(str(path))
+    
+    # Check for Pereira 2018 standard format
+    # structure: examples (n_stim, n_voxels) and meta struct
+    if "examples" in mat and "meta" in mat:
+        examples = mat["examples"] # format (stimuli, voxels)
+        meta = mat["meta"][0, 0] # access first element of 1x1 struct array
+        
+        # Identify matrix coordinates if possible
+        if hasattr(meta, "indicesIn3D"):
+            # indicesIn3D is linear indices in a 3D volume
+            dims = getattr(meta, "dimensions", [0, 0, 0])
+            indices = meta["indicesIn3D"].flatten() - 1 # MATLAB is 1-indexed
+            
+            # Convert linear indices back to 3D coords
+            coords = np.column_stack(np.unravel_index(indices, dims))
+            return examples.astype(float), coords.astype(float)
+        else:
+            # Fallback if indicesIn3D not found
+            n_voxels = examples.shape[1]
+            dummy_coords = np.column_stack([np.arange(n_voxels), np.zeros(n_voxels), np.zeros(n_voxels)])
+            return examples.astype(float), dummy_coords.astype(float)
+
+    raise ValueError(f"MAT file {path} does not match any recognized Pereira/Neuro brain data format. "
+                     f"Expected keys 'examples' and 'meta'. Found: {list(mat.keys())}")
 
 
 def align_tokens_to_trs(
