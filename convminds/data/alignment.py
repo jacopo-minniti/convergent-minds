@@ -135,3 +135,67 @@ def simple_tokenize(text: str) -> list[str]:
         return []
     tokens = re.findall(r"[A-Za-z0-9]+|[^\sA-Za-z0-9]", cleaned)
     return [token for token in tokens if token.strip()]
+
+
+def lanczos_kernel(cutoff: float, t: np.ndarray, window: int = 3) -> np.ndarray:
+    """
+    Computes the Lanczos kernel for a given cutoff frequency and time offsets.
+    
+    Args:
+        cutoff: Cutoff frequency (typically 1/TR).
+        t: Time offsets (new_time - old_times).
+        window: Number of lobes (default 3).
+    """
+    t = t * cutoff
+    # Handle t=0 case to avoid division by zero
+    with np.errstate(divide='ignore', invalid='ignore'):
+        val = window * np.sin(np.pi * t) * np.sin(np.pi * t / window) / (np.pi**2 * t**2)
+    
+    val[t == 0] = 1.0
+    val[np.abs(t) > window] = 0.0
+    return val
+
+
+def lanczos_interp2d(
+    data: np.ndarray,
+    old_times: np.ndarray,
+    new_times: np.ndarray,
+    *,
+    window: int = 3,
+    cutoff_mult: float = 1.0,
+    rectify: bool = False,
+) -> np.ndarray:
+    """
+    Interpolates 2D data (samples x features) from old_times to new_times using a Lanczos filter.
+    Commonly used to downsample word/phoneme level features to fMRI TR times.
+    
+    Args:
+        data: Input matrix of shape (n_old, n_features).
+        old_times: Timestamps for each row in data.
+        new_times: Timestamps to interpolate to (e.g., fMRI TR times).
+        window: Lanczos window size (lobes).
+        cutoff_mult: Multiplier for the cutoff frequency (1/average_tr).
+        rectify: If True, returns positive and negative components separately (doubles features).
+    """
+    if len(new_times) < 2:
+        # Fallback for single timepoint or empty
+        cutoff = 1.0
+    else:
+        cutoff = (1.0 / np.mean(np.diff(new_times))) * cutoff_mult
+
+    # Build interpolation matrix
+    interp_matrix = np.zeros((len(new_times), len(old_times)))
+    for i, t_new in enumerate(new_times):
+        weights = lanczos_kernel(cutoff, t_new - old_times, window=window)
+        # Normalize weights to sum to 1 to preserve signal amplitude
+        weights_sum = weights.sum()
+        if weights_sum > 1e-10:
+            weights = weights / weights_sum
+        interp_matrix[i, :] = weights
+
+    if rectify:
+        pos = np.dot(interp_matrix, np.clip(data, 0, np.inf))
+        neg = np.dot(interp_matrix, np.clip(data, -np.inf, 0))
+        return np.hstack([pos, neg])
+
+    return np.dot(interp_matrix, data)
