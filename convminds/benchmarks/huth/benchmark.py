@@ -94,54 +94,57 @@ class HuthBenchmark(BaseBenchmark):
                 raise
 
         # Ensure derivatives/preprocessed_data and derivatives/TextGrids are fetched
-        # Note: OpenNeuro uses 'derivatives' (plural) and TextGrids
         derivatives_dir = self.raw_dir / "derivatives"
-        if not (derivatives_dir / "preprocessed_data").exists() or not (derivatives_dir / "TextGrids").exists():
-            logger.info("Fetching derivatives via DataLad...")
+
+        # Improved check: even if folders exist, are they populated with real data (not broken symlinks)?
+        def is_populated(d: Path, glob_pattern: str) -> bool:
+            return d.exists() and any(f.exists() for f in d.glob(glob_pattern))
+
+        if not is_populated(derivatives_dir / "preprocessed_data", "**/*.hf5") or \
+           not is_populated(derivatives_dir / "TextGrids", "*.TextGrid"):
+            logger.info("Dataset folder exists but appears empty or broken. Forcing a refresh...")
             
-            # --- AGGRESSIVE RECOVERY LOGIC (CLUSTER-FRIENDLY) ---
-            dataset_root = str(self.raw_dir)
+            # --- ABSOLUTE SYSTEMATIC FETCHING (CLUSTER-FRIENDLY) ---
             def run_git(args, check=False):
-                return subprocess.run(["git"] + args, cwd=dataset_root, check=check, capture_output=True, text=True)
+                return subprocess.run(["git"] + args, cwd=str(self.raw_dir), check=check, capture_output=True, text=True)
             
             def run_datalad(args, check=False):
-                return subprocess.run(["datalad"] + args, cwd=dataset_root, check=check, capture_output=True, text=True)
+                # Older DataLad versions need absolute paths to avoid 'path not associated' errors
+                return subprocess.run(["datalad"] + args, check=check, capture_output=True, text=True)
 
             logger.info("Forcing S3 mirror connectivity...")
-            # 1. Reset any 'annex-ignore' blocks
             run_git(["config", "remote.origin.annex-ignore", "false"])
-            run_git(["config", "--unset", "remote.origin.annex-ignore"])
-            
-            # 2. Directly enable S3 mirrors (OpenNeuro's names)
             run_git(["annex", "enableremote", "s3-PUBLIC"])
             run_git(["annex", "enableremote", "s3-BACKUP"])
             
-            # 3. Recursive 'get' for required data (executed from dataset root)
+            # Recursive 'get' using absolute paths
             try:
-                # Ensure we have git identity else datalad fails (common on new clusters)
+                # Ensure we have git identity
                 res = run_git(["config", "--global", "user.email"])
                 if not res.stdout.strip():
                     logger.info("Setting temporary git identity for DataLad...")
                     subprocess.run(["git", "config", "--global", "user.email", "convminds@google.com"], check=False)
                     subprocess.run(["git", "config", "--global", "user.name", "Convminds Bot"], check=False)
 
-                # Fetch story metadata first (small files)
-                logger.info("Fetching Huth metadata (TextGrids/respdict)...")
-                run_datalad(["get", "-r", "derivatives/TextGrids"], check=True)
-                run_datalad(["get", "derivatives/respdict.json"], check=True)
+                # 1. Fetch story metadata (TextGrids/respdict) first
+                logger.info("Systematically fetching Huth metadata (TextGrids/respdict)...")
+                abs_stim_dir = (self.raw_dir / "derivatives/TextGrids").absolute()
+                abs_respdict = (self.raw_dir / "derivatives/respdict.json").absolute()
+                run_datalad(["get", "-r", str(abs_stim_dir)], check=True)
+                run_datalad(["get", str(abs_respdict)], check=True)
                 
-                # Fetch BOLD data for both possible candidate folders
+                # 2. Fetch BOLD data for both possible candidate folders
                 for cand in [self.sub_prefix_id, self.subject_id]:
-                    logger.info(f"Fetching BOLD data for {cand}...")
-                    # We try multiple sources explicitly if they didn't automount
-                    p = f"derivatives/preprocessed_data/{cand}"
-                    run_datalad(["get", "-r", p], check=False)
+                    logger.info(f"Systematically fetching BOLD data for {cand}...")
+                    abs_subj_path = (self.raw_dir / f"derivatives/preprocessed_data/{cand}").absolute()
+                    # Regular get
+                    run_datalad(["get", "-r", str(abs_subj_path)], check=False)
                     # If that failed, try forcing the source
-                    if not (self.raw_dir / p).exists():
-                         run_datalad(["get", "-r", "--source", "s3-PUBLIC", p], check=False)
-                         run_datalad(["get", "-r", "--source", "s3-BACKUP", p], check=False)
+                    if not is_populated(abs_subj_path, "*.hf5"):
+                         run_datalad(["get", "-r", "--source", "s3-PUBLIC", str(abs_subj_path)], check=False)
+                         run_datalad(["get", "-r", "--source", "s3-BACKUP", str(abs_subj_path)], check=False)
             except subprocess.CalledProcessError as e:
-                logger.warning(f"DataLad get attempt failed: {e}")
+                logger.warning(f"DataLad systematic get attempt failed: {e}")
                 if not (self.raw_dir / "derivatives/respdict.json").exists():
                      msg = f"Missing Huth metadata ({self.raw_dir / 'derivatives/respdict.json'}). Please verify internet access or run on a login node."
                      logger.error(msg)
