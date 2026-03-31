@@ -10,7 +10,7 @@ from tqdm import tqdm
 import logging
 import sys
 import convminds as cm
-from convminds.models.vae_adapter import VaeBrainAdapter
+from convminds.models.vae_adapter import VaeBrainAdapter, info_nce_loss
 from convminds.nn.losses import TripartiteVAELoss
 from convminds.transforms.pca import VoxelPCA
 from convminds.transforms.timeseries import TrimTRs
@@ -223,153 +223,134 @@ if __name__ == "__main__":
     criterion = TripartiteVAELoss()
     scheduler = CosineAnnealingLR(optimizer, T_max=15)
     
-    total_epochs = 15
-    logger.info(f"Starting 2-Phase Training ({total_epochs} epochs)...")
+    results_comparison = {}
     
-    def run_eval(model, loader, mode="similarity"):
+    # --- EXPERIMENT RUNNER ---
+    def run_experiment(exp_name, use_vae_warmup=True):
+        logger.info(f"\n{'='*40}")
+        logger.info(f"RUNNING EXPERIMENT: {exp_name}")
+        logger.info(f"{'='*40}")
+        
+        model = VaeBrainAdapter(input_dim=1000, n_frames=4, latent_dim=768).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+        scheduler = CosineAnnealingLR(optimizer, T_max=20)
+        criterion = TripartiteVAELoss()
+        
+        total_epochs = 20
+        for epoch in range(1, total_epochs + 1):
+            model.train()
+            epoch_losses = {"rec": [], "align": []}
+            
+            # Logic: 
+            # Model A (use_vae_warmup=True): 1-10 Recon, 11-20 Align
+            # Model B (use_vae_warmup=False): 1-20 Align
+            if use_vae_warmup:
+                phase = 1 if epoch <= 10 else 2
+            else:
+                phase = 2
+            
+            pbar = tqdm(train_loader, desc=f"[{exp_name}] Ep {epoch:2d} Ph {phase}")
+            for batch in pbar:
+                x = batch["bold"].to(device)
+                h_text = embedder.embed(batch["text"]).to(device)
+                outputs = model(x)
+                
+                if phase == 1:
+                    # Reconstruction Task
+                    criterion.rec_weight = 1.0
+                    criterion.kl_weight = 0.005
+                    criterion.align_weight = 0.0
+                    metrics = criterion(
+                        recon_x=outputs["x_hat"],
+                        x=outputs["x_orig"],
+                        mu=outputs["mu"],
+                        logvar=outputs["logvar"],
+                        z=outputs["z"],
+                        h_text=h_text
+                    )
+                    loss = metrics["loss"]
+                else:
+                    # Alignment Task (using InfoNCE)
+                    # We utilize the 'z' or 'mu' for alignment. 'mu' is more stable.
+                    loss = info_nce_loss(outputs["mu"], h_text)
+                    metrics = {"rec_loss": torch.tensor(0.0), "align_loss": loss}
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                if phase == 1:
+                    epoch_losses["rec"].append(metrics["rec_loss"].item())
+                else:
+                    epoch_losses["align"].append(metrics["align_loss"].item())
+            
+            scheduler.step()
+            
+            # Compact Logging
+            if phase == 1:
+                logger.info(f"Ep {epoch:2d} | Train MSE (Recon): {np.mean(epoch_losses['rec']):.4f}")
+            else:
+                logger.info(f"Ep {epoch:2d} | Train InfoNCE (Align): {np.mean(epoch_losses['align']):.4f}")
+
+        # Final Eval
+        stats = run_eval(model, test_loader)
+        results_comparison[exp_name] = stats
+        return model, stats
+
+    def run_eval(model, loader):
         model.eval()
         results = {"mse_recon": [], "mse_align": [], "cosine": [], "corr": [], "top10_acc": []}
-        
         with torch.no_grad():
             for batch in loader:
                 x = batch["bold"].to(device)
                 h_text = embedder.embed(batch["text"]).to(device)
                 outputs = model(x)
                 
-                # Metrics
-                mse_recon = torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"])).item()
-                mse_align = torch.mean(torch.square(outputs["mu"] - h_text)).item()
+                results["mse_recon"].append(torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"])).item())
+                results["mse_align"].append(torch.mean(torch.square(outputs["mu"] - h_text)).item())
+                results["cosine"].append(F.cosine_similarity(outputs["mu"], h_text, dim=-1).mean().item())
                 
-                # Cosine Similarity
-                cos = F.cosine_similarity(outputs["mu"], h_text, dim=-1).mean().item()
-                
-                # Brain-to-Text Correlation
+                # Correlation
                 flat_hat = outputs["x_hat"].cpu().numpy()
                 flat_orig = outputs["x_orig"].cpu().numpy()
-                corr = np.corrcoef(flat_hat.flatten(), flat_orig.flatten())[0, 1]
+                results["corr"].append(np.corrcoef(flat_hat.flatten(), flat_orig.flatten())[0, 1])
                 
-                # Identification Accuracy (Top-10)
-                # How many predicted 'mu' are closest to their corresponding 'h_text' in the batch?
+                # Identification Acc
                 if outputs["mu"].shape[0] > 1:
-                    dist_matrix = torch.cdist(outputs["mu"], h_text) # (B, B)
-                    for i in range(dist_matrix.shape[0]):
-                        # Get indices of top 10 closest text embeddings for this brain sample
-                        top10 = torch.topk(dist_matrix[i], k=min(10, dist_matrix.shape[0]), largest=False).indices
-                        if i in top10:
-                            results["top10_acc"].append(1.0)
-                        else:
-                            results["top10_acc"].append(0.0)
-                
-                results["mse_recon"].append(mse_recon)
-                results["mse_align"].append(mse_align)
-                results["cosine"].append(cos)
-                results["corr"].append(corr)
-                
+                    cos_sim_matrix = F.cosine_similarity(outputs["mu"].unsqueeze(1), h_text.unsqueeze(0), dim=-1) # (B, B)
+                    for i in range(cos_sim_matrix.shape[0]):
+                        top10 = torch.topk(cos_sim_matrix[i], k=min(10, cos_sim_matrix.shape[0])).indices
+                        results["top10_acc"].append(1.0 if i in top10 else 0.0)
         return {k: np.mean(v) if v else 0.0 for k, v in results.items()}
 
-    for epoch in range(1, total_epochs + 1):
-        model.train()
-        epoch_losses = {"rec": [], "align": []}
-        
-        phase = 1 if epoch <= 5 else 2
-        
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch} (Phase {phase})")
-        for batch in pbar:
-            x = batch["bold"].to(device)
-            texts = batch["text"]
-            
-            # Target GPT-2 Embeddings (Mean of token embeddings)
-            h_text = embedder.embed(texts)
-            
-            outputs = model(x)
-            
-            if phase == 1:
-                # Phase 1: Pure VAE (Reconstruction + KL)
-                # Keep KL weight small to prioritize manifold quality
-                criterion.rec_weight = 1.0
-                criterion.kl_weight = 0.005 # Beta-VAE
-                criterion.align_weight = 0.0
-                
-                metrics = criterion(
-                    recon_x=outputs["x_hat"],
-                    x=outputs["x_orig"],
-                    mu=outputs["mu"],
-                    logvar=outputs["logvar"],
-                    z=outputs["z"],
-                    h_text=h_text
-                )
-            else:
-                # Phase 2: Focused Alignment (No Recon, No KL)
-                # Task: Map Brain latent space (mu) directly to LLM space (h_text)
-                align_mse = torch.mean(torch.square(outputs["mu"] - h_text))
-                
-                loss = align_mse
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                
-                # Metrics for logging
-                metrics = {
-                    "loss": loss,
-                    "rec_loss": torch.tensor(0.0),
-                    "kl_loss": torch.tensor(0.0),
-                    "align_loss": align_mse
-                }
+    # --- EXECUTION ---
+    # Model A: Sequential (VAE -> Align)
+    model_a, stats_a = run_experiment("Model_A (Sequential)", use_vae_warmup=True)
+    
+    # Model B: Direct (Align only)
+    model_b, stats_b = run_experiment("Model_B (Direct Align)", use_vae_warmup=False)
 
-            if phase == 1:
-                optimizer.zero_grad()
-                metrics["loss"].backward()
-                optimizer.step()
-            
-            if phase == 1:
-                epoch_losses["rec"].append(metrics["rec_loss"].item())
-            else:
-                epoch_losses["align"].append(metrics["align_loss"].item())
-        
-        if phase == 1:
-            avg_rec = np.mean(epoch_losses["rec"])
-            logger.info(f"Epoch {epoch:2d} | Phase 1 | Train MSE (Recon): {avg_rec:.4f}")
-        else:
-            avg_align = np.mean(epoch_losses["align"])
-            logger.info(f"Epoch {epoch:2d} | Phase 2 | Train MSE (Align): {avg_align:.4f}")
-            
-        scheduler.step()
-
-        # Intermediate Evaluation: After Phase 1 (Epoch 5)
-        if epoch == 5:
-            logger.info("\n--- INTERMEDIATE EVALUATION (Reconstruction Task) ---")
-            stats = run_eval(model, test_loader)
-            logger.info(f"  MSE (Recon):      {stats['mse_recon']:.4f}")
-            logger.info(f"  Global Corr:      {stats['corr']:.4f}")
-            logger.info(f"  Manifold Quality (Var Exp): {(1.0 - stats['mse_recon'])*100:.2f}%")
-            logger.info("------------------------------------------------------\n")
+    # Comparison Report
+    logger.info("\n" + "="*50)
+    logger.info("ABLATION COMPARISON REPORT")
+    logger.info("="*50)
+    logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15} | {'Model B (Dir)':<15}")
+    logger.info("-" * 55)
+    for k in stats_a.keys():
+        logger.info(f"{k:<20} | {stats_a[k]:<15.4f} | {stats_b[k]:<15.4f}")
+    logger.info("="*50)
     
-    # 5. Final Evaluation
-    logger.info("\n--- FINAL EVALUATION (Similarity Task) ---")
-    stats = run_eval(model, test_loader)
-    
-    logger.info("ALIGNMENT PERFORMANCE:")
-    logger.info(f"  MSE (Align):          {stats['mse_align']:.4f}")
-    logger.info(f"  Mean Cosine Sim:      {stats['cosine']:.4f}")
-    logger.info(f"  Identification Acc:   {stats['top10_acc']*100:.2f}% (Top-10 in batch)")
-    logger.info("-" * 30)
-    
-    logger.info("RECONSTRUCTION (Residual):")
-    logger.info(f"  MSE (Recon):          {stats['mse_recon']:.4f}")
-    logger.info(f"  Global Corr:          {stats['corr']:.4f}")
-    logger.info("-" * 30)
-    
-    # Track a few samples for numerical analysis
+    # track first batch samples for A
     test_samples = []
-    model.eval()
+    model_a.eval()
     with torch.no_grad():
         for batch in test_loader:
             x = batch["bold"].to(device)
             texts = batch["text"]
-            outputs = model(x)
+            outputs = model_a(x)
             for j in range(min(2, len(texts))):
-                hat_vals = outputs["x_hat"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
-                orig_vals = outputs["x_orig"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
+                hat_vals = outputs["mu"][j][:5].detach().cpu().numpy() # Using MU as proxy for alignment state
+                orig_vals = embedder.embed([texts[j]])[0, :5].detach().cpu().numpy()
                 test_samples.append({
                     "id": f"{batch['subject'][j]} | {batch['story'][j]} | TR {batch['tr'][j]}",
                     "text": texts[j],
@@ -378,15 +359,15 @@ if __name__ == "__main__":
                     "hat_pca": hat_vals,
                     "orig_pca": orig_vals
                 })
-            break # Just need first batch samples
+            break
     
     logger.info("\nSAMPLE TEST INSTANCES (Numerical Decode Analysis):")
     for i, s in enumerate(test_samples):
         logger.info(f"Sample: {s['id']}")
         logger.info(f"  Time Window:  {s['time'][0].item():.1f}s -> {s['time'][1].item():.1f}s")
         logger.info(f"  Context Text: \"{s['text']}\" ({s['w_count']} words)")
-        logger.info(f"  Top 5 PCA (Pred): {s['hat_pca']}")
-        logger.info(f"  Top 5 PCA (True): {s['orig_pca']}")
+        logger.info(f"  Latent (Align-mu, First 5): {s['hat_pca']}")
+        logger.info(f"  Target (LLM-WTE, First 5):  {s['orig_pca']}")
         # Calculate local Pearson for these 5
         local_c = np.corrcoef(s['hat_pca'], s['orig_pca'])[0, 1]
         logger.info(f"  Local Component Correlation: {local_c:.4f}")
