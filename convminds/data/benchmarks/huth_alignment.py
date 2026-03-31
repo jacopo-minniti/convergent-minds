@@ -1,7 +1,10 @@
 import torch
 import numpy as np
 from torch.utils.data import Dataset
+import convminds as cm
 from convminds.benchmarks import HuthBenchmark
+from convminds.transforms.pca import VoxelPCA
+from convminds.data.primitives import BrainTensor
 
 class HuthAlignmentDataset(Dataset):
     """
@@ -13,26 +16,62 @@ class HuthAlignmentDataset(Dataset):
     - Brain Input: BOLD TR X+1 to X+4 (capturing HRF lag)
     """
     def __init__(self, subject_ids=["S1"], split="train", pca_dim=1000):
-        self.benchmark = HuthBenchmark()
         self.bold_data = {}
         self.story_metadata = {}
         self.all_samples = []
         
-        # Load and preprocess (consistent with the HuthBenchmark format)
+        # Load and preprocess
         for subj in subject_ids:
-            recordings = self.benchmark.human_recording_source.load_recordings(
-                subject_id=subj, compute_type="pca", n_components=pca_dim
+            # 1. Initialize benchmark for this subject (ensures data materialization)
+            benchmark = HuthBenchmark(subject=subj)
+            
+            # 2. Load Raw Recordings
+            recording_data = benchmark.human_recording_source.load_recordings(
+                benchmark, selector={"subject": subj}
             )
+            
+            # 2. Setup PCA
+            all_bold = np.vstack(recording_data.values)
+            # Use a subject-specific cache path
+            cache_path = cm.cache.convminds_home() / "cache" / "pca" / f"huth_{subj}_pca_{pca_dim}.joblib"
+            pca = VoxelPCA(n_components=pca_dim, cache_path=cache_path)
+            
+            # Wrap for PCA fitting
+            brain_for_pca = BrainTensor(
+                torch.from_numpy(all_bold).unsqueeze(0).float(),
+                torch.zeros((all_bold.shape[1], 3)),
+                recording_data.metadata.get("rois", {})
+            )
+            pca.fit(brain_for_pca)
+            
+            # 3. Process each story
             self.bold_data[subj] = {}
-            for record in recordings:
-                story_name = record.metadata["story_name"]
-                self.bold_data[subj][story_name] = record.data
+            for story_idx, story_name in enumerate(recording_data.stimulus_ids):
+                # Project
+                story_bold = recording_data.values[story_idx]
+                bt = BrainTensor(torch.from_numpy(story_bold).unsqueeze(0).float(), torch.zeros(story_bold.shape[1], 3), {})
+                projected = pca(bt).signal.squeeze(0).numpy()
+                
+                # Z-score normalization per run
+                mean = projected.mean(axis=0, keepdims=True)
+                std = projected.std(axis=0, keepdims=True) + 1e-8
+                projected = (projected - mean) / std
+                
+                self.bold_data[subj][story_name] = projected
+                
+                # Get story metadata for alignment
+                # benchmark.stimuli contains records with metadata
+                record = None
+                for r in benchmark.stimuli:
+                    if r.stimulus_id == story_name:
+                        record = r
+                        break
+                
+                if record is None: continue
                 self.story_metadata[story_name] = record.metadata
                 
-                # Split logic: Huth has thousands of TRs, we use the last 10% for test
-                actual_trs = record.data.shape[0]
+                actual_trs = projected.shape[0]
                 test_start = int(actual_trs * 0.9)
-                
                 tr_range = range(3, actual_trs - 4)
                 if split == "train":
                     tr_range = range(3, test_start - 4)
