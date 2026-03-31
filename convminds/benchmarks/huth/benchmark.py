@@ -103,15 +103,19 @@ class HuthBenchmark(BaseBenchmark):
         essential_paths = ["derivatives/respdict.json", "derivatives/TextGrids"]
         for p in essential_paths:
             full_p = self.huth_dir / p
-            if not full_p.exists() or (full_p.is_file() and full_p.stat().st_size < 1000):
+            # Check if directory is hollow or file is missing/symbolic link
+            is_hollow = not full_p.exists() or \
+                        (full_p.is_dir() and not any(full_p.glob("*.TextGrid") if "TextGrids" in p else full_p.glob("*"))) or \
+                        (full_p.is_file() and full_p.stat().st_size < 100)
+            if is_hollow:
                 logger.info(f"Materializing {p}...")
-                self._run_datalad(["get", p], self.huth_dir)
+                self._run_datalad(["get", "-rn", p], self.huth_dir) # -n to avoid asking for confirmation if any
 
         # 3. Get BOLD data for subject if not present or hollow
         subj_dir = self.huth_dir / "derivatives" / "preprocessed_data" / self.subject_id
         if not subj_dir.exists() or not any(f.is_file() and f.stat().st_size > 1e6 for f in subj_dir.glob("*.hf5")):
             logger.info(f"Materializing BOLD data for {self.subject_id}...")
-            self._run_datalad(["get", f"derivatives/preprocessed_data/{self.subject_id}"], self.huth_dir)
+            self._run_datalad(["get", "-r", f"derivatives/preprocessed_data/{self.subject_id}"], self.huth_dir)
              
         logger.info("Huth data ready.")
 
@@ -146,6 +150,8 @@ class HuthBenchmark(BaseBenchmark):
             
         # Discover stories that actually have BOLD files
         hf5_files = list(subj_dir.glob("*.hf5"))
+        logger.info(f"Found {len(hf5_files)} .hf5 files in {subj_dir}")
+        
         records = []
         rows = []
         
@@ -154,6 +160,7 @@ class HuthBenchmark(BaseBenchmark):
             
         tg_mapping = {normalize(p.stem): p for p in stim_dir.glob("*.TextGrid")}
         respdict_norm = {normalize(k): v for k, v in respdict.items()}
+        logger.info(f"Loaded {len(tg_mapping)} TextGrids and {len(respdict_norm)} metadata entries.")
 
         for hf_path in hf5_files:
             story = hf_path.stem
@@ -161,6 +168,7 @@ class HuthBenchmark(BaseBenchmark):
             
             tg_path = tg_mapping.get(norm_story)
             if not tg_path or not tg_path.exists():
+                logger.warning(f"Skipping story {story}: TextGrid not found at {tg_path}")
                 continue
                 
             n_trs = respdict_norm.get(norm_story)

@@ -11,7 +11,7 @@ from typing import Any
 
 def convminds_home() -> Path:
     home = os.environ.get("CONVMINDS_HOME", "~/.convminds")
-    return Path(home).expanduser()
+    return Path(home).expanduser().resolve()
 
 
 def hf_home() -> Path:

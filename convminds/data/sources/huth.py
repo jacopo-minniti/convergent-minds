@@ -95,7 +95,13 @@ class HuthRecordingSource(HumanRecordingSource):
         subject_id = f"UTS{id_num:02d}"
         
         subject_dir = self.ds_root / "derivatives" / "preprocessed_data" / subject_id
+        
+        if not benchmark.stimuli:
+            logger.error(f"Benchmark stimuli list is empty for {subject_id}. Check TextGrids and hf5 files.")
+            raise ValueError(f"No stimuli (stories) found for benchmark {benchmark.name} and subject {subject_id}")
+
         stories = [s.stimulus_id for s in benchmark.stimuli]
+        logger.info(f"Attempting to load recordings for {len(stories)} stories from {subject_dir}")
         
         all_values = []
         all_story_ids = []
@@ -103,6 +109,7 @@ class HuthRecordingSource(HumanRecordingSource):
         
         for story in stories:
             resp_path = subject_dir / f"{story}.hf5"
+            logger.debug(f"Checking {resp_path}")
             
             # Simple datalad get if file is hollow or missing
             if not resp_path.exists() or resp_path.stat().st_size < 1000:
