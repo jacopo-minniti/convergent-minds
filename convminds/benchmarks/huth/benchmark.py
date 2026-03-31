@@ -106,7 +106,7 @@ class HuthBenchmark(BaseBenchmark):
             # Check if directory is hollow or file is missing/symbolic link
             is_hollow = not full_p.exists() or \
                         (full_p.is_dir() and not any(full_p.glob("*.TextGrid") if "TextGrids" in p else full_p.glob("*"))) or \
-                        (full_p.is_file() and full_p.stat().st_size < 100)
+                        (full_p.is_file() and full_p.lstat().st_size < 100)
             if is_hollow:
                 logger.info(f"Materializing {p}...")
                 self._run_datalad(["get", "-rn", p], self.huth_dir) # -n to avoid asking for confirmation if any
@@ -116,10 +116,8 @@ class HuthBenchmark(BaseBenchmark):
         hf5_files = list(subj_dir.glob("*.hf5"))
         
         # Determine if we need to get data:
-        # 1. Folder doesn't exist
-        # 2. Folder exists but no .hf5 files
-        # 3. Folder exists, but contains at least one hollow symlink
-        needs_get = not subj_dir.exists() or not hf5_files or any(f.stat().st_size < 1000 for f in hf5_files)
+        # Use lstat() to check the symlink itself, avoiding FileNotFoundError on broken links
+        needs_get = not subj_dir.exists() or not hf5_files or any(f.lstat().st_size < 1000 for f in hf5_files)
         
         if needs_get:
             logger.info(f"Materializing COMPLETE subject folder for {self.subject_id} (recursive)...")

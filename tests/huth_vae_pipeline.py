@@ -79,10 +79,22 @@ class HuthVaeDataset(Dataset):
             # 2. Fit Subject-Specific PCA
             # We stack all stories for the subject to fit PCA on global variance
             all_subj_bold = np.vstack(stories)
-            pca = VoxelPCA(n_components=self.n_components)
+            
+            # Setup specific cache path for this subject
+            cache_dir = cm.cache.convminds_home() / "cache" / "pca"
+            cache_path = cache_dir / f"huth_{subj}_pca_{self.n_components}.joblib"
+            
+            pca = VoxelPCA(n_components=self.n_components, cache_path=cache_path)
+            
             # Create a brain tensor for fitting PCA
-            # signal: (B=1, T, V)
-            brain_for_pca = cm.data.primitives.BrainTensor(torch.from_numpy(all_subj_bold).unsqueeze(0).float(), torch.zeros(all_subj_bold.shape[1], 3), rois)
+            # signal: (B=1, T, Voxels)
+            brain_for_pca = cm.data.primitives.BrainTensor(
+                torch.from_numpy(all_subj_bold).unsqueeze(0).float(), 
+                torch.zeros((all_subj_bold.shape[1], 3)), 
+                rois
+            )
+            
+            logger.info(f"Solving PCA for {subj} (fitting on {all_subj_bold.shape[0]} TRs)...")
             pca.fit(brain_for_pca)
             self.subject_pcas[subj] = pca
             
