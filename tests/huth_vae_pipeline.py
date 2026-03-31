@@ -98,6 +98,11 @@ class HuthVaeDataset(Dataset):
             pca.fit(brain_for_pca)
             self.subject_pcas[subj] = pca
             
+            if pca._pca is not None:
+                exp_var = np.sum(pca._pca.explained_variance_ratio_)
+                logger.info(f"Subject {subj} PCA Total Explained Variance: {exp_var:.4f}")
+                logger.info(f"Top 5 Ratio: {pca._pca.explained_variance_ratio_[:5]}")
+            
             # 3. Transform Stories using learned PCA
             self.bold_data[subj] = {}
             for i, story_name in enumerate(story_names):
@@ -113,6 +118,7 @@ class HuthVaeDataset(Dataset):
                 projected = (projected - mean) / std
                 
                 self.bold_data[subj][story_name] = projected
+                logger.debug(f"  Story {story_name} projected stats: Mean={projected.mean():.4f}, Std={projected.std():.4f}, Max={projected.max():.4f}")
                 
             # 4. GATHER STIMULUS ALIGNMENT
             # Use metadata to align brain with words
@@ -261,10 +267,8 @@ if __name__ == "__main__":
     logger.info("\nStarting Final Evaluation on Test Set...")
     model.eval()
     test_metrics = {
-        "loss": [],
         "recon": [],
-        "kl": [],
-        "align": []
+        "corr": []
     }
     
     # Track a few samples
@@ -286,10 +290,16 @@ if __name__ == "__main__":
                 h_text=h_text
             )
             
-            test_metrics["loss"].append(metrics["loss"].item())
             test_metrics["recon"].append(metrics["rec_loss"].item())
-            test_metrics["kl"].append(metrics["kl_loss"].item())
-            test_metrics["align"].append(metrics["align_loss"].item())
+            
+            # Correlation check (batch-wide)
+            flat_hat = outputs["x_hat"].detach().cpu().numpy().flatten()
+            flat_orig = outputs["x_orig"].detach().cpu().numpy().flatten()
+            corr = np.corrcoef(flat_hat, flat_orig)[0, 1]
+            test_metrics["corr"].append(corr)
+            
+            if i == 0:
+                logger.debug(f"  Eval Batch Recon Stats: Mean={flat_hat.mean():.4f}, Std={flat_hat.std():.4f}")
             
             # Save first two samples from the first test batch
             if i == 0:
@@ -302,9 +312,11 @@ if __name__ == "__main__":
                     })
 
     final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
+    final_corr = sum(test_metrics["corr"]) / len(test_metrics["corr"])
     
     logger.info("---------------------------------------")
-    logger.info(f"FINAL TEST MSE: {final_recon:.4f}")
+    logger.info(f"FINAL TEST MSE:  {final_recon:.4f}")
+    logger.info(f"FINAL TEST CORR: {final_corr:.4f}")
     logger.info("---------------------------------------")
     
     logger.info("\nSAMPLE TEST INSTANCES:")
