@@ -15,7 +15,7 @@ from convminds.nn.losses import TripartiteVAELoss
 from convminds.nn.metrics import calculate_nlp_metrics, identification_accuracy
 from convminds.transforms.pca import VoxelPCA
 from convminds.transforms.timeseries import TrimTRs
-from transformers import GPT2Tokenizer, GPT2Model
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import argparse
 
 # Configure logging (using INFO for clean dashboard)
@@ -23,13 +23,13 @@ logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s: %(mess
 logger = logging.getLogger(__name__)
 
 class GPT2Embedder:
-    def __init__(self, model_name="gpt2", device="cpu"):
-        self.tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-        self.model = GPT2Model.from_pretrained(model_name).to(device).eval()
+    def __init__(self, device="cpu"):
         self.device = device
-        
-        # We want the token embedding layer specifically for Phase 2 targets
-        self.wte = self.model.wte
+        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        # Use LMHeadModel to enable actual word prediction
+        self.model = GPT2LMHeadModel.from_pretrained("gpt2").to(self.device)
+        self.model.eval()
+        self.wte = self.model.transformer.wte
 
     @torch.no_grad()
     def embed_with_context(self, context_texts, target_texts):
@@ -39,37 +39,45 @@ class GPT2Embedder:
         """
         all_embeddings = []
         for ctx, target in zip(context_texts, target_texts):
-            # Combined text: "Context Target"
             full_text = (ctx.strip() + " " + target.strip()).strip()
             if not full_text:
                 all_embeddings.append(torch.zeros(1, 768).to(self.device))
                 continue
                 
             inputs = self.tokenizer(full_text, return_tensors="pt").to(self.device)
-            # Use the full model to get hidden states (context-aware)
-            outputs = self.model(**inputs)
-            # (Batch=1, SeqLen, 768)
+            outputs = self.model.transformer(**inputs)
             hidden_states = outputs.last_hidden_state
             
-            # We want the embeddings corresponding to the TARGET words
-            # Simple heuristic: take the last few tokens that match the target length
-            # or just take the mean of the whole sequence if target is small.
-            # Most accurate is to find where context ends, but mean of full sequence 
-            # is a robust proxy for 'the state of the story at TR X'.
             target_ids = self.tokenizer(target.strip(), add_special_tokens=False).input_ids
             num_target_tokens = len(target_ids)
             
             if num_target_tokens > 0:
-                # Take the last N tokens (the target)
                 target_hidden = hidden_states[:, -num_target_tokens:, :]
                 mean_target = target_hidden.mean(dim=1)
             else:
-                # If target is empty (silence), take the last state of context
                 mean_target = hidden_states[:, -1:, :]
                 
             all_embeddings.append(mean_target.squeeze(1))
             
         return torch.cat(all_embeddings, dim=0)
+
+    @torch.no_grad()
+    def predict_tokens(self, latent_vecs, top_k=5):
+        """
+        Passes the brain latent through the GPT2 LM Head to get word predictions.
+        """
+        # (B, 768) -> (B, 50257) vocab logits
+        logits = self.model.lm_head(latent_vecs)
+        probs = torch.softmax(logits, dim=-1)
+        
+        top_probs, top_indices = torch.topk(probs, k=top_k, dim=-1)
+        
+        results = []
+        for b in range(latent_vecs.shape[0]):
+            toks = [self.tokenizer.decode([idx]).strip() for idx in top_indices[b]]
+            scores = top_probs[b].tolist()
+            results.append(list(zip(toks, scores)))
+        return results
 
 class HuthVaeDataset(Dataset):
     """
@@ -416,43 +424,58 @@ if __name__ == "__main__":
         logger.info(row)
     logger.info("="*60)
     
-    # samples tracking
-    final_model = model_a if args.mode in ["two_phase", "both"] else model_b
+    # Track first batch samples to see actual text decoding
     test_samples = []
+    final_model = model_a if args.mode in ["two_phase", "both"] else model_b
     final_model.eval()
+    
+    # We also need the full bank for retrieval
+    all_mus, all_texts = [], []
+    with torch.no_grad():
+        for batch in test_loader:
+            x = batch["bold"].to(device)
+            outputs = final_model(x)
+            all_mus.append(outputs["mu"])
+            all_texts.extend(batch["target"])
+    full_mus = torch.cat(all_mus, dim=0)
+
+    # Re-evaluate the first 5 samples from the loader for visual inspection
     with torch.no_grad():
         for batch in test_loader:
             x = batch["bold"].to(device)
             contexts = batch["context"]
             targets = batch["target"]
-            outputs = model_a(x)
-            h_text_batch = embedder.embed_with_context(contexts, targets)
+            outputs = final_model(x)
             
-            for j in range(min(2, len(targets))):
-                hat_vals = outputs["mu"][j][:5].detach().cpu().numpy()
-                orig_vals = h_text_batch[j, :5].detach().cpu().numpy()
+            # For visual inspection, find closest in full_mus
+            scores = F.cosine_similarity(outputs["mu"].unsqueeze(1), full_mus.unsqueeze(0), dim=-1)
+            
+            # Use LM Head to get pure token predictions
+            token_preds = embedder.predict_tokens(outputs["mu"], top_k=3)
+            
+            for j in range(min(5, len(targets))):
+                best_idx = torch.argmax(scores[j]).item()
                 test_samples.append({
                     "id": f"{batch['subject'][j]} | {batch['story'][j]} | TR {batch['tr'][j]}",
                     "context": contexts[j],
                     "target": targets[j],
-                    "w_count": len(targets[j].split()),
-                    "time": batch["time_window"][j],
-                    "hat_pca": hat_vals,
-                    "orig_pca": orig_vals
+                    "predicted": all_texts[best_idx],
+                    "top_tokens": token_preds[j],
+                    "time": batch["time_window"][j]
                 })
-            break
-    
-    logger.info("\nSAMPLE TEST INSTANCES (Numerical Decode Analysis):")
+            break # only use first batch for visual table 1
+
+    logger.info("\n" + "="*60)
+    logger.info("VISUAL BRAIN DECODING SAMPLES")
+    logger.info("="*60)
     for i, s in enumerate(test_samples):
-        logger.info(f"Sample: {s['id']}")
-        logger.info(f"  Time Window:  {s['time'][0].item():.1f}s -> {s['time'][1].item():.1f}s")
-        logger.info(f"  Context Text: \"{s['context']}\"")
-        logger.info(f"  Target Text:  \"{s['target']}\" ({s['w_count']} words)")
-        logger.info(f"  Latent (Align-mu, First 5): {s['hat_pca']}")
-        logger.info(f"  Target (LLM-WTE, First 5):  {s['orig_pca']}")
-        # Calculate local Pearson for these 5
-        local_c = np.corrcoef(s['hat_pca'], s['orig_pca'])[0, 1]
-        logger.info(f"  Local Component Correlation: {local_c:.4f}")
-        logger.info("-" * 30)
+        logger.info(f"\n[{i+1}] {s['id']}")
+        logger.info(f"  CONTEXT:  \"{s['context']}\"")
+        logger.info(f"  TRUE:     \"{s['target']}\"")
+        logger.info(f"  RETRIEVED: \"{s['predicted']}\"")
+        # Format Top-3 tokens
+        tok_str = ", ".join([f"{t} ({p*100:.1f}%)" for t, p in s['top_tokens']])
+        logger.info(f"  BRAIN-TOKENS: {tok_str}")
+    logger.info("="*60)
 
     logger.info("\nUniversal Brain-to-LLM Adapter training finalized.")
