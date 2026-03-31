@@ -31,8 +31,8 @@ class VaeBrainAdapter(nn.Module):
         self.flattened_dim = input_dim * n_frames
         self.latent_dim = latent_dim
         
-        # Positional Encoding
-        self.positional_params = nn.Parameter(torch.randn(n_frames, input_dim))
+        # Positional Encoding (initialized small)
+        self.positional_params = nn.Parameter(torch.randn(n_frames, input_dim) * 0.01)
         
         # Encoder
         self.encoder_mlp = nn.Sequential(
@@ -80,17 +80,10 @@ class VaeBrainAdapter(nn.Module):
         return self.decoder_mlp(z)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Input Brain [x] Mean: {x.mean().item():.4f}, Std: {x.std().item():.4f}")
-        
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         x_hat = self.decode(z)
         
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Latent z Mean: {z.mean().item():.4f}, Std: {z.std().item():.4f}")
-            logger.debug(f"X_hat (Recon) Mean: {x_hat.mean().item():.4f}")
-            
         return {
             "mu": mu,
             "logvar": logvar,

@@ -131,6 +131,7 @@ class HuthVaeDataset(Dataset):
                     self.all_samples.append((subj, story_name, t))
         
         logger.info(f"Preprocessing complete. Total samples: {len(self.all_samples)}")
+        
 
     def __len__(self):
         return len(self.all_samples)
@@ -201,7 +202,8 @@ if __name__ == "__main__":
     
     # 3. Model & Loss (Tripartite)
     model = VaeBrainAdapter(input_dim=1000, n_frames=4, latent_dim=768).to(device)
-    loss_fn = TripartiteVAELoss(rec_weight=1.0, kl_weight=0.005, align_weight=0.5, temperature=0.07).to(device)
+    # Simplified Loss: Only MSE/Reconstruction for now to verify capacity
+    loss_fn = TripartiteVAELoss(rec_weight=1.0, kl_weight=0.0, align_weight=0.0).to(device)
     
     # 4. Optimization
     # We must optimize both the model parameters AND the learnable loss parameters (for temperature)
@@ -251,15 +253,8 @@ if __name__ == "__main__":
             epoch_losses["kl"].append(metrics["kl_loss"].item())
             epoch_losses["align"].append(metrics["align_loss"].item())
             
-        avg_loss = sum(epoch_losses["loss"]) / len(epoch_losses["loss"])
         avg_recon = sum(epoch_losses["recon"]) / len(epoch_losses["recon"])
-        avg_kl = sum(epoch_losses["kl"]) / len(epoch_losses["kl"])
-        avg_align = sum(epoch_losses["align"]) / len(epoch_losses["align"])
-        
-        current_temp = 1.0 / loss_fn.info_nce.logit_scale.exp().item()
-        
-        logger.info(f"Epoch {epoch} complete.")
-        logger.info(f"  Train -> Loss: {avg_loss:.4f} | Recon: {avg_recon:.4f} | KL: {avg_kl:.4f} | Align: {avg_align:.4f} | Temp: {current_temp:.4f}")
+        logger.info(f"Epoch {epoch} complete. Train MSE: {avg_recon:.4f}")
         scheduler.step()
     
     # 5. Final Evaluation
@@ -306,19 +301,10 @@ if __name__ == "__main__":
                         "tr": batch.get("tr", [0]*len(texts))[j]
                     })
 
-    final_loss = sum(test_metrics["loss"]) / len(test_metrics["loss"])
     final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
-    final_kl = sum(test_metrics["kl"]) / len(test_metrics["kl"])
-    final_align = sum(test_metrics["align"]) / len(test_metrics["align"])
-    current_temp = 1.0 / loss_fn.info_nce.logit_scale.exp().item()
     
     logger.info("---------------------------------------")
-    logger.info("FINAL TEST METRICS:")
-    logger.info(f"Loss:  {final_loss:.4f}")
-    logger.info(f"Recon: {final_recon:.4f}")
-    logger.info(f"KL:    {final_kl:.4f}")
-    logger.info(f"Align: {final_align:.4f}")
-    logger.info(f"Temp:  {current_temp:.4f}")
+    logger.info(f"FINAL TEST MSE: {final_recon:.4f}")
     logger.info("---------------------------------------")
     
     logger.info("\nSAMPLE TEST INSTANCES:")
