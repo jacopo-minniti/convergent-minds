@@ -139,6 +139,7 @@ class HuthRecordingSource(HumanRecordingSource):
             try:
                 with h5py.File(resp_path, "r") as hf:
                     data = hf["data"][:] # (TR, Voxels)
+                    data = np.nan_to_num(data, copy=False)
                     all_values.append(data.astype(np.float32))
                     all_story_ids.append(story)
                     
