@@ -208,9 +208,14 @@ if __name__ == "__main__":
     scheduler = CosineAnnealingLR(optimizer, T_max=100) # Simplified scheduler for brevity
     
     logger.info("Starting Training Loop...")
-    for epoch in range(1, 11): # 10 epochs for demo
+    for epoch in range(1, 6): # Reduced to 5 epochs for speed
         model.train()
-        epoch_losses = []
+        epoch_losses = {
+            "loss": [],
+            "recon": [],
+            "kl": [],
+            "align": []
+        }
         for batch in tqdm(train_loader, desc=f"Epoch {epoch}", leave=False):
             # x: BOLD features (batch, 4, 1000)
             x = batch["bold"].to(device)
@@ -235,10 +240,82 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             metrics["loss"].backward()
             optimizer.step()
-            epoch_losses.append(metrics["loss"].item())
             
-        avg_loss = sum(epoch_losses) / len(epoch_losses)
-        logger.info(f"Epoch {epoch} complete. Avg Loss: {avg_loss:.4f}")
-        scheduler.step()
+            epoch_losses["loss"].append(metrics["loss"].item())
+            epoch_losses["recon"].append(metrics["recon_loss"].item())
+            epoch_losses["kl"].append(metrics["kl_loss"].item())
+            epoch_losses["align"].append(metrics["align_loss"].item())
+            
+        avg_loss = sum(epoch_losses["loss"]) / len(epoch_losses["loss"])
+        avg_recon = sum(epoch_losses["recon"]) / len(epoch_losses["recon"])
+        avg_kl = sum(epoch_losses["kl"]) / len(epoch_losses["kl"])
+        avg_align = sum(epoch_losses["align"]) / len(epoch_losses["align"])
         
-    logger.info("Universal Brain-to-LLM Adapter training finalized.")
+        logger.info(f"Epoch {epoch} complete.")
+        logger.info(f"  Train -> Loss: {avg_loss:.4f} | Recon: {avg_recon:.4f} | KL: {avg_kl:.4f} | Align: {avg_align:.4f}")
+        scheduler.step()
+    
+    # 5. Final Evaluation
+    logger.info("\nStarting Final Evaluation on Test Set...")
+    model.eval()
+    test_metrics = {
+        "loss": [],
+        "recon": [],
+        "kl": [],
+        "align": []
+    }
+    
+    # Track a few samples
+    test_samples = []
+    
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm(test_loader, desc="Evaluating")):
+            x = batch["bold"].to(device)
+            texts = batch["text"]
+            h_text = embedder.embed(texts).to(device)
+            
+            outputs = model(x)
+            metrics = loss_fn(
+                recon_x=outputs["x_hat"], 
+                x=outputs["x_orig"], 
+                mu=outputs["mu"], 
+                logvar=outputs["logvar"],
+                z=outputs["z"],
+                h_text=h_text
+            )
+            
+            test_metrics["loss"].append(metrics["loss"].item())
+            test_metrics["recon"].append(metrics["recon_loss"].item())
+            test_metrics["kl"].append(metrics["kl_loss"].item())
+            test_metrics["align"].append(metrics["align_loss"].item())
+            
+            # Save first two samples from the first test batch
+            if i == 0:
+                for j in range(min(2, len(texts))):
+                    test_samples.append({
+                        "text": texts[j],
+                        "subject": batch["subject"][j],
+                        "story": batch["story"][j],
+                        "tr": batch.get("tr", [0]*len(texts))[j]
+                    })
+
+    final_loss = sum(test_metrics["loss"]) / len(test_metrics["loss"])
+    final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
+    final_kl = sum(test_metrics["kl"]) / len(test_metrics["kl"])
+    final_align = sum(test_metrics["align"]) / len(test_metrics["align"])
+    
+    logger.info("---------------------------------------")
+    logger.info("FINAL TEST METRICS:")
+    logger.info(f"Loss:  {final_loss:.4f}")
+    logger.info(f"Recon: {final_recon:.4f}")
+    logger.info(f"KL:    {final_kl:.4f}")
+    logger.info(f"Align: {final_align:.4f}")
+    logger.info("---------------------------------------")
+    
+    logger.info("\nSAMPLE TEST INSTANCES:")
+    for i, s in enumerate(test_samples):
+        logger.info(f"Sample {i+1} [{s['subject']} | {s['story']} | TR {s['tr']}]:")
+        logger.info(f"  Context Text: \"{s['text']}\"")
+        logger.info("-" * 30)
+
+    logger.info("\nUniversal Brain-to-LLM Adapter training finalized.")
