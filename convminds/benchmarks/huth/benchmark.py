@@ -186,8 +186,11 @@ class HuthBenchmark(BaseBenchmark):
             with open(tg_path, "r") as f:
                 tg = TextGrid(f.read())
                 
-            word_tier = tg.get_tier("words")
-            if not word_tier: continue
+            word_tier = tg.get_tier("words") or tg.get_tier("word")
+            if not word_tier:
+                available_tiers = [t['name'] for t in tg.tiers]
+                logger.warning(f"Skipping story {story}: no 'words' or 'word' tier found in TextGrid. Available: {available_tiers}")
+                continue
             
             intervals = word_tier["intervals"]
             metadata = {"tr_times": tr_times.tolist(), "word_intervals": intervals, "n_trs": n_trs}

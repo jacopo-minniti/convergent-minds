@@ -27,29 +27,37 @@ class TextGrid:
     def _parse(self, content: str):
         # Extremely simplified parser for "ooTextFile" format
         # Finds items (tiers) and their intervals
-        items = re.split(r'item\s*\[\s*\d+\s*\]\s*:', content)
+        # Handle both "item [1]:" and "item [1]"
+        items = re.split(r'item\s*\[\s*\d+\s*\]\s*:?', content)
         for item in items[1:]:
-            tier_name_match = re.search(r'name\s*=\s*"(.*)"', item)
+            tier_name_match = re.search(r'name\s*=\s*"(.*?)"', item)
             if not tier_name_match:
                 continue
             
-            tier_name = tier_name_match.group(1)
+            tier_name = tier_name_match.group(1).lower()
             intervals = []
-            # Find interval blocks
-            interval_blocks = re.findall(r'intervals\s*\[\s*\d+\s*\]\s*:.*?(?=intervals\s*\[|$)', item, re.DOTALL)
+            
+            # More robust interval regex: find everything between intervals[...] and the next one
+            interval_blocks = re.findall(r'intervals\s*\[\s*\d+\s*\]\s*:?.*?(?=intervals\s*\[|$)', item, re.DOTALL)
             for block in interval_blocks:
-                xmin = re.search(r'xmin\s*=\s*([\d\.]+)', block)
-                xmax = re.search(r'xmax\s*=\s*([\d\.]+)', block)
-                text = re.search(r'text\s*=\s*"(.*)"', block)
+                # Find xmin/xmax/text with or without quotes/equal signs
+                xmin = re.search(r'xmin\s*[=:]\s*([\d\.]+)', block)
+                xmax = re.search(r'xmax\s*[=:]\s*([\d\.]+)', block)
+                text = re.search(r'text\s*[=:]\s*"(.*?)"', block)
                 if xmin and xmax and text:
                     intervals.append({
                         "xmin": float(xmin.group(1)),
                         "xmax": float(xmax.group(1)),
                         "text": text.group(1)
                     })
-            self.tiers.append({"name": tier_name, "intervals": intervals})
+            if intervals:
+                self.tiers.append({"name": tier_name, "intervals": intervals})
+        
+        if not self.tiers:
+            logger.debug("TextGrid parsing yielded no tiers.")
 
     def get_tier(self, name: str):
+        name = name.lower()
         for tier in self.tiers:
             if tier["name"] == name:
                 return tier
