@@ -476,6 +476,19 @@ if __name__ == "__main__":
         # Format Top-3 tokens
         tok_str = ", ".join([f"{t} ({p*100:.1f}%)" for t, p in s['top_tokens']])
         logger.info(f"  BRAIN-TOKENS: {tok_str}")
-    logger.info("="*60)
+    # --- MODEL SAVING ---
+    convminds_home = os.environ.get("CONVMINDS_HOME", ".")
+    save_dir = os.path.join(convminds_home, "models", "huth_vae_ablation")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    if model_a:
+        save_path_a = os.path.join(save_dir, "vae_seq_adapter.pt")
+        torch.save(model_a.state_dict(), save_path_a)
+        logger.info(f"Model A (Sequential) saved to: {save_path_a}")
+        
+    if model_b:
+        save_path_b = os.path.join(save_dir, "vae_direct_adapter.pt")
+        torch.save(model_b.state_dict(), save_path_b)
+        logger.info(f"Model B (Direct) saved to: {save_path_b}")
 
     logger.info("\nUniversal Brain-to-LLM Adapter training finalized.")
