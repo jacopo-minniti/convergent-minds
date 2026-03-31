@@ -17,7 +17,7 @@ from convminds.transforms.timeseries import TrimTRs
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 class GPT2Embedder:
@@ -106,15 +106,22 @@ class HuthVaeDataset(Dataset):
                 # Wrap (T, V) into BrainTensor for transform
                 bt = cm.data.primitives.BrainTensor(torch.from_numpy(stories[i]).unsqueeze(0).float(), torch.zeros(stories[i].shape[1], 3), rois)
                 projected = pca(bt).signal.squeeze(0).numpy() # (T, 1000)
+                
+                # Z-score normalization per run
+                mean = projected.mean(axis=0, keepdims=True)
+                std = projected.std(axis=0, keepdims=True) + 1e-8
+                projected = (projected - mean) / std
+                
                 self.bold_data[subj][story_name] = projected
                 
             # 4. GATHER STIMULUS ALIGNMENT
             # Use metadata to align brain with words
             for record in benchmark.stimuli:
                 story_name = record.stimulus_id
+                if story_name not in self.bold_data[subj]:
+                    continue
+                    
                 self.story_metadata[story_name] = record.metadata
-                
-                # IMPORTANT: Use the actual number of BOLD TRs we have loaded
                 actual_trs = self.bold_data[subj][story_name].shape[0]
                 
                 # Valid TRs t for windows [t-2:t+1] and BOLD [t+1:t+5]
@@ -176,7 +183,7 @@ if __name__ == "__main__":
     
     # Subjects (Starting with 4 for speed, user suggested 8)
     # Ensure datalad download for ds003020 derivative is ready!
-    subject_ids = ["S1", "S2"] # Keeping it small for start/test
+    subject_ids = ["S1"] # Fixed: focusing on S1 as requested
     
     # 1. Dataset & Loaders
     dataset = HuthVaeDataset(subject_ids=subject_ids, trim=5, device=device)

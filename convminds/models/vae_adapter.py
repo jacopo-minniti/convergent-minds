@@ -4,7 +4,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import logging
 
+
+logger = logging.getLogger(__name__)
 
 class VaeBrainAdapter(nn.Module):
     """
@@ -85,9 +88,17 @@ class VaeBrainAdapter(nn.Module):
         return self.decoder_mlp(z)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Input Brain [x] Mean: {x.mean().item():.4f}, Std: {x.std().item():.4f}")
+        
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         x_hat = self.decode(z)
+        
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Latent z Mean: {z.mean().item():.4f}, Std: {z.std().item():.4f}")
+            logger.debug(f"X_hat (Recon) Mean: {x_hat.mean().item():.4f}")
+            
         return {
             "mu": mu,
             "logvar": logvar,
