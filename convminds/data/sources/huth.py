@@ -145,21 +145,29 @@ class HuthRecordingSource(HumanRecordingSource):
                     all_values.append(data.astype(np.float32))
                     all_story_ids.append(story)
                     
-                    for key in hf.keys():
-                        if key.startswith("roi_"):
-                            all_rois[key] = torch.as_tensor(hf[key][:], dtype=torch.bool)
+                    if not all_rois:
+                        for key in hf.keys():
+                            if key.startswith("roi_"):
+                                all_rois[key] = torch.as_tensor(hf[key][:], dtype=torch.bool)
             except Exception as e:
                 logger.error(f"Failed to load {resp_path}: {e}")
                 continue
         
+        total_stories = len(all_values)
         if not all_values:
             raise FileNotFoundError(f"No valid BOLD data found for {subject_id} in {subject_dir}")
             
-        feature_ids = [f"voxel-{i}" for i in range(all_values[0].shape[1])]
+        logger.info(f"Loaded {total_stories} stories into memory. Finalizing data structure...")
+            
+        # Create feature IDs efficiently (cached)
+        if not hasattr(self, "_feature_ids_cache") or len(self._feature_ids_cache) != all_values[0].shape[1]:
+            n_voxels = all_values[0].shape[1]
+            self._feature_ids_cache = [f"v{i}" for i in range(n_voxels)]
+            
         return HumanRecordingData(
             values=all_values,
             stimulus_ids=all_story_ids,
-            feature_ids=feature_ids,
+            feature_ids=self._feature_ids_cache,
             metadata={"subject": subject_id, "rois": all_rois},
             category=DataCategory.TOKEN_LEVEL,
         )
