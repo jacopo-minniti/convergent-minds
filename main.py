@@ -12,6 +12,7 @@ import sys
 import convminds as cm
 from convminds.models.vae_adapter import VaeBrainAdapter, info_nce_loss
 from convminds.nn.losses import TripartiteVAELoss
+from convminds.nn.metrics import calculate_nlp_metrics, identification_accuracy
 from convminds.transforms.pca import VoxelPCA
 from convminds.transforms.timeseries import TrimTRs
 from transformers import GPT2Tokenizer, GPT2Model
@@ -319,40 +320,12 @@ if __name__ == "__main__":
         stats = run_eval(model, test_loader)
         results_comparison[exp_name] = stats
         return model, stats
-    def calculate_nlp_metrics(pred_text, target_text):
-        """Calculates BLEU-1, ROUGE-1, and WER for a single pair of texts."""
-        def tokenize(t): return t.lower().split()
-        p_toks, t_toks = tokenize(pred_text), tokenize(target_text)
-        if not t_toks: return {"bleu": 0.0, "rouge": 0.0, "wer": 0.0}
-        if not p_toks: return {"bleu": 0.0, "rouge": 0.0, "wer": 1.0}
-        
-        # 1. ROUGE-1 (Recall)
-        matches = len([w for w in p_toks if w in t_toks])
-        rouge = matches / len(t_toks)
-        
-        # 2. BLEU-1 (Precision + Brevity Penalty)
-        precision = matches / len(p_toks)
-        bp = 1.0 if len(p_toks) >= len(t_toks) else np.exp(1 - len(t_toks)/len(p_toks))
-        bleu = precision * bp
-        
-        # 3. WER (Word Error Rate - Levenshtein distance)
-        d = np.zeros((len(t_toks)+1, len(p_toks)+1))
-        for i in range(len(t_toks)+1): d[i,0] = i
-        for j in range(len(p_toks)+1): d[0,j] = j
-        for i in range(1, len(t_toks)+1):
-            for j in range(1, len(p_toks)+1):
-                if t_toks[i-1] == p_toks[j-1]: d[i,j] = d[i-1,j-1]
-                else: d[i,j] = min(d[i-1,j]+1, d[i,j-1]+1, d[i-1,j-1]+1)
-        wer = d[len(t_toks), len(p_toks)] / len(t_toks)
-        
-        return {"bleu": bleu, "rouge": rouge, "wer": min(wer, 1.0)}
 
     def run_eval(model, loader):
         model.eval()
         results = {"mse_recon": [], "mse_align": [], "cosine": [], 
-                   "top10_acc": [], "bleu": [], "rouge": [], "wer": []}
+                   "top10_acc": [], "bleu": [], "rouge1": [], "rougeL": [], "wer": [], "meteor": []}
         
-        # We collect all batch results to run retrieval-based decoding
         all_mus, all_targets, all_texts = [], [], []
         
         with torch.no_grad():
@@ -365,34 +338,23 @@ if __name__ == "__main__":
                 results["mse_align"].append(torch.mean(torch.square(outputs["mu"] - h_text)).item())
                 results["cosine"].append(F.cosine_similarity(outputs["mu"], h_text, dim=-1).mean().item())
                 
-                # Identification Acc
-                if outputs["mu"].shape[0] > 1:
-                    cos_sim_matrix = F.cosine_similarity(outputs["mu"].unsqueeze(1), h_text.unsqueeze(0), dim=-1)
-                    for i in range(cos_sim_matrix.shape[0]):
-                        top10 = torch.topk(cos_sim_matrix[i], k=min(10, cos_sim_matrix.shape[0])).indices
-                        results["top10_acc"].append(1.0 if i in top10 else 0.0)
+                # Identification Acc (using native convminds metric)
+                results["top10_acc"].append(identification_accuracy(outputs["mu"], h_text, top_k=10))
                 
                 all_mus.append(outputs["mu"])
                 all_targets.append(h_text)
                 all_texts.extend(batch["target"])
         
         # Retrieval-based NLP Decoding
-        # For each mu, find the closest target embedding in the bank
         full_mus = torch.cat(all_mus, dim=0)
         full_targets = torch.cat(all_targets, dim=0)
-        
-        # Cosine similarity matrix between all predicted brain states and all possible text embeddings
         scores = F.cosine_similarity(full_mus.unsqueeze(1), full_targets.unsqueeze(0), dim=-1)
+        
         for i in range(len(all_texts)):
-            # Pick the best text match (excluding self distance check, we want generalization)
             best_match_idx = torch.argmax(scores[i]).item()
-            best_text = all_texts[best_match_idx]
-            ground_truth = all_texts[i]
-            
-            metrics = calculate_nlp_metrics(best_text, ground_truth)
-            results["bleu"].append(metrics["bleu"])
-            results["rouge"].append(metrics["rouge"])
-            results["wer"].append(metrics["wer"])
+            nlp_stats = calculate_nlp_metrics(all_texts[best_match_idx], all_texts[i])
+            for k, v in nlp_stats.items():
+                results[k].append(v)
             
         return {k: np.mean(v) if v else 0.0 for k, v in results.items()}
 
@@ -412,13 +374,17 @@ if __name__ == "__main__":
     logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15} | {'Model B (Dir)':<15}")
     logger.info("-" * 60)
     # Filter for interesting metrics
-    metrics_to_show = ["mse_align", "cosine", "top10_acc", "bleu", "rouge", "wer"]
+    metrics_to_show = ["mse_align", "cosine", "top10_acc", "bleu", "rouge-1", "rouge-L", "wer", "meteor"]
     for k in metrics_to_show:
-        if k in stats_a:
-            val_a = stats_a[k]
-            val_b = stats_b[k]
+        # Standardize keys for the report
+        key = k.replace("-", "") if k != "rouge-L" else "rougeL"
+        if key == "rouge1": key="rouge1" # No-op just to be clear
+        
+        if key in stats_a:
+            val_a = stats_a[key]
+            val_b = stats_b[key]
             # Use percentage for certain metrics
-            if k in ["top10_acc", "bleu", "rouge"]:
+            if key in ["top10_acc", "bleu", "rouge1", "rougeL", "meteor"]:
                 logger.info(f"{k:<20} | {val_a*100:<14.2f}% | {val_b*100:<14.2f}%")
             else:
                 logger.info(f"{k:<20} | {val_a:<15.4f} | {val_b:<15.4f}")
