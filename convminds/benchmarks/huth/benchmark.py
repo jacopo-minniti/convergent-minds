@@ -45,124 +45,92 @@ class HuthBenchmark(BaseBenchmark):
         window: int = 3,
         use_datalad: bool = True,
     ) -> None:
-        self.raw_dir = Path(raw_dir or convminds_home() / "data/huth/raw").expanduser()
-        self.processed_path = Path(processed_path or convminds_home() / f"data/huth/processed/huth.{subject}.pkl").expanduser()
-        
-        # OpenNeuro naming: S1 -> UTS01 / sub-UTS01. We try both for robustness.
+        # 1. Subject normalization (S1 -> UTS01)
         self.raw_subject = subject
         id_num = int(subject[1:]) if subject.startswith("S") else int(subject.replace("UTS", "").replace("sub-", ""))
         self.subject_id = f"UTS{id_num:02d}"
-        self.sub_prefix_id = f"sub-{self.subject_id}"
         
-        # We will resolve the actual subject directory in ensure_data or prepare_processed
-        self.subject = self.sub_prefix_id # Default
+        # 2. Paths
+        self.raw_dir = Path(raw_dir or convminds_home() / "data/huth").expanduser()
+        self.processed_path = Path(processed_path or convminds_home() / f"data/huth_processed/huth.{self.subject_id}.pkl").expanduser()
         
         self.trim = trim
         self.window = window
         self.use_datalad = use_datalad
 
-        # 1. Ensure data is present
+        # 3. Ensure data is present
         self.ensure_data()
 
-        # 2. Prepare processed stimuli and structure
+        # 4. Prepare processed stimuli and structure
         stimuli = self._load_or_prepare_stimuli()
         
-        # 3. Setup Source
+        # 5. Setup Source
         source = HuthRecordingSource(ds_root=self.raw_dir)
         
         super().__init__(
-            identifier=f"huth.{self.raw_subject}",
+            identifier=f"huth.{self.subject_id}",
             stimuli=stimuli,
             split_config=SplitConfig(cv=1, topic_splitting=True, train_size=0.9, random_state=42),
             human_recording_source=source,
-            description=f"Huth 2023 natural language fMRI benchmark for subject {self.raw_subject} ({self.subject})."
+            description=f"Huth 2023 natural language fMRI benchmark for subject {self.subject_id}."
         )
+
+    def _run_datalad(self, cmd: list[str], cwd: Path | str):
+        logger.info(f"Running: datalad {' '.join(cmd)}")
+        try:
+            res = subprocess.run(["datalad"] + cmd, cwd=str(cwd), capture_output=True, text=True, check=True)
+            if res.stdout:
+                for line in res.stdout.splitlines(): logger.debug(f"[datalad] {line}")
+            return res
+        except subprocess.CalledProcessError as e:
+            logger.error(f"DataLad command failed: {' '.join(cmd)}")
+            if e.stderr: logger.error(f"Error: {e.stderr}")
+            raise
 
     def ensure_data(self):
         """
         Uses DataLad to fetch the ds003020 dataset if it doesn't exist.
+        Follows user instructions to download only necessary subject data.
         """
+        # 1. Clone if not present
         if not self.raw_dir.exists() or not (self.raw_dir / ".datalad").exists():
-            logger.info(f"Huth dataset not found at {self.raw_dir}. Initializing DataLad clone...")
+            logger.info(f"Huth dataset not found at {self.raw_dir}. Initializing DataLad clone from OpenNeuro...")
             self.raw_dir.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run([
+                "datalad", "clone", "https://github.com/OpenNeuroDatasets/ds003020.git", str(self.raw_dir)
+            ], check=True)
+
+        # 2. Get Metadata (json files are already there but symlinks)
+        # Actually OpenNeuro clones contain json files, but we should make sure respdict.json is there
+        respdict_path = self.raw_dir / "derivatives/respdict.json"
+        if not respdict_path.exists() or respdict_path.stat().st_size < 1000: # Symlinks are small
+            logger.info("Materializing Huth metadata (respdict.json)...")
+            self._run_datalad(["get", "derivatives/respdict.json"], self.raw_dir)
+
+        # 3. Get Stimuli (TextGrids)
+        textgrids_dir = self.raw_dir / "derivatives/TextGrids"
+        # Check if dir is empty or contains only broken symlinks
+        if not textgrids_dir.exists() or not any(f.is_file() and f.stat().st_size > 100 for f in textgrids_dir.glob("*.TextGrid")):
+            logger.info("Materializing Huth stimuli (TextGrids)...")
+            self._run_datalad(["get", "derivatives/TextGrids"], self.raw_dir)
+
+        # 4. Get BOLD data for the specific subject
+        subj_data_dir = self.raw_dir / "derivatives/preprocessed_data" / self.subject_id
+        # The user mentioned {01} goes until {09}. The repo might have sub-UTS01 or just UTS01.
+        # User explicitly said "derivatives/preprocessed_data/UTS01"
+        if not subj_data_dir.exists() or not any(f.is_file() and f.stat().st_size > 1e6 for f in subj_data_dir.glob("*.hf5")):
+            logger.info(f"Materializing Huth BOLD data for subject: {self.subject_id}...")
+            # Try plain UTSXX first
+            rel_path = f"derivatives/preprocessed_data/{self.subject_id}"
             try:
-                subprocess.run([
-                    "datalad", "clone", "https://github.com/OpenNeuroDatasets/ds003020.git", str(self.raw_dir)
-                ], check=True)
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to clone Huth dataset: {e}")
-                raise
+                self._run_datalad(["get", rel_path], self.raw_dir)
+            except Exception:
+                # Try sub-UTSXX if it fails
+                logger.info(f"Retrying with sub- prefix for {self.subject_id}...")
+                self._run_datalad(["get", f"derivatives/preprocessed_data/sub-{self.subject_id}"], self.raw_dir)
+             
+        logger.info("Huth data environment ready.")
 
-        # Ensure derivatives/preprocessed_data and derivatives/TextGrids are fetched
-        derivatives_dir = self.raw_dir / "derivatives"
-
-        # Improved check: even if folders exist, are they populated with real data (not broken symlinks)?
-        def is_populated(d: Path, glob_pattern: str) -> bool:
-            # We must resolve for symlinks and check for actual file content
-            return d.exists() and any(f.is_file() and f.stat().st_size > 0 for f in d.glob(glob_pattern))
-
-        if not is_populated(derivatives_dir / "preprocessed_data", "**/*.hf5") or \
-           not is_populated(derivatives_dir / "TextGrids", "*.TextGrid"):
-            logger.info("Dataset folder exists but appears empty or broken. Forcing a refresh...")
-            
-            # --- ABSOLUTE SYSTEMATIC FETCHING WITH VERBOSE LOGS ---
-            def run_logged(cmd, cwd=None, check=False):
-                logger.info(f"EXECUTING: {' '.join(cmd)}")
-                res = subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
-                if res.stdout:
-                    for line in res.stdout.splitlines(): logger.info(f"  [STDOUT] {line}")
-                if res.stderr:
-                    for line in res.stderr.splitlines(): logger.warning(f"  [STDERR] {line}")
-                return res
-
-            logger.info("Forcing S3 mirror connectivity...")
-            run_logged(["git", "config", "remote.origin.annex-ignore", "false"], cwd=str(self.raw_dir))
-            run_logged(["git", "annex", "enableremote", "s3-PUBLIC"], cwd=str(self.raw_dir))
-            run_logged(["git", "annex", "enableremote", "s3-BACKUP"], cwd=str(self.raw_dir))
-            
-            # Recursive 'get' using absolute paths
-            try:
-                # Ensure we have git identity
-                res = run_logged(["git", "config", "--global", "user.email"])
-                if not res.stdout.strip():
-                    logger.info("Setting temporary git identity for DataLad...")
-                    run_logged(["git", "config", "--global", "user.email", "convminds@google.com"])
-                    run_logged(["git", "config", "--global", "user.name", "Convminds Bot"])
-
-                # 1. Fetch story metadata (TextGrids/respdict) first
-                logger.info("Systematically fetching Huth metadata (TextGrids/respdict)...")
-                abs_stim_dir = (self.raw_dir / "derivatives/TextGrids").absolute()
-                abs_respdict = (self.raw_dir / "derivatives/respdict.json").absolute()
-                run_logged(["datalad", "get", "-r", str(abs_stim_dir)], check=True)
-                run_logged(["datalad", "get", str(abs_respdict)], check=True)
-                
-                if not is_populated(abs_stim_dir, "*.TextGrid"):
-                     logger.error("FATAL: TextGrids not materialized after datalad get.")
-                
-                # 2. Fetch BOLD data for both possible candidate folders
-                for cand in [self.sub_prefix_id, self.subject_id]:
-                    logger.info(f"Systematically fetching BOLD data for {cand}...")
-                    abs_subj_path = (self.raw_dir / f"derivatives/preprocessed_data/{cand}").absolute()
-                    # Regular get
-                    run_logged(["datalad", "get", "-r", str(abs_subj_path)], check=False)
-                    # If that failed, try forcing the source
-                    if not is_populated(abs_subj_path, "*.hf5"):
-                         logger.warning(f"Regular get failed for {cand}. Forcing S3 source...")
-                         run_logged(["datalad", "get", "-r", "--source", "s3-PUBLIC", str(abs_subj_path)], check=False)
-                         run_logged(["datalad", "get", "-r", "--source", "s3-BACKUP", str(abs_subj_path)], check=False)
-                         
-                    # FINAL VERIFICATION
-                    if is_populated(abs_subj_path, "*.hf5"):
-                         logger.info(f"SUCCESS: BOLD data for {cand} is now materialized.")
-                    else:
-                         logger.warning(f"FAILURE: BOLD data for {cand} is still broken after all attempts.")
-
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"DataLad systematic get attempt failed: {e}")
-                if not (self.raw_dir / "derivatives/respdict.json").exists():
-                     msg = f"Missing Huth metadata ({self.raw_dir / 'derivatives/respdict.json'}). Please verify internet access or run on a login node."
-                     logger.error(msg)
-                     raise FileNotFoundError(msg)
 
     def _load_or_prepare_stimuli(self) -> StimulusSet:
         if self.processed_path.exists():
@@ -188,33 +156,22 @@ class HuthBenchmark(BaseBenchmark):
         derivatives_dir = self.raw_dir / "derivatives"
         stim_dir = derivatives_dir / "TextGrids"
         
-        # Opportunistically find correctly named subject directory
-        def is_valid_dir(p: Path) -> bool:
-            return p.exists() and any(f.exists() for f in p.glob("*.hf5"))
+        # 1. Resolve subject directory (could be UTS01 or sub-UTS01)
+        subj_dir = derivatives_dir / "preprocessed_data" / self.subject_id
+        if not subj_dir.exists():
+            subj_dir = derivatives_dir / "preprocessed_data" / f"sub-{self.subject_id}"
             
-        subject_dir = derivatives_dir / "preprocessed_data" / self.sub_prefix_id
-        if not is_valid_dir(subject_dir):
-             alt_dir = derivatives_dir / "preprocessed_data" / self.subject_id
-             if is_valid_dir(alt_dir):
-                  subject_dir = alt_dir
-                  self.subject = self.subject_id 
-             elif alt_dir.exists():
-                  # If alt exists but is empty/broken, still favor it over sub_prefix if sub_prefix was worse
-                  subject_dir = alt_dir
-                  self.subject = self.subject_id
+        if not subj_dir.exists():
+             raise FileNotFoundError(f"Subject folder not found: {self.subject_id}. Did datalad get fail?")
         
         respdict_path = derivatives_dir / "respdict.json"
-        
         with open(respdict_path, "r") as f:
             respdict = json.load(f)
             
-        # Discover stories from the HDF5 files in the subject folder
-        if not subject_dir.exists():
-             raise FileNotFoundError(f"Subject folder not found: {subject_dir}")
-             
-        hf5_files = list(subject_dir.glob("*.hf5"))
+        # 2. Discover stories from the HDF5 files in the subject folder
+        hf5_files = list(subj_dir.glob("*.hf5"))
         if not hf5_files:
-             logger.warning(f"No BOLD HDF5 files found for subject {self.subject} in {subject_dir}")
+             logger.warning(f"No BOLD HDF5 files found for subject {self.subject_id} in {subj_dir}")
              
         records = []
         rows = []

@@ -90,37 +90,24 @@ class HuthRecordingSource(HumanRecordingSource):
         Loads fMRI responses for the stories defined in the benchmark.
         """
         import torch
+        # 1. Normalize Subject
         subject_orig = selector.get("subject", "S1") if selector else "S1"
         id_num = int(subject_orig[1:]) if subject_orig.startswith("S") else int(subject_orig.replace("UTS", "").replace("sub-", ""))
+        subject_id = f"UTS{id_num:02d}"
         
-        # OpenNeuro naming: S1 -> UTS01 / sub-UTS01. Try both.
+        # 2. Resolve Path (benchmark.raw_dir / derivatives/preprocessed_data / UTS01)
         derivatives_path = self.ds_root / "derivatives"
-        sub_id = f"sub-UTS{id_num:02d}"
-        uts_id = f"UTS{id_num:02d}"
-        
-        # Identify non-empty/non-broken directory
-        def is_valid_dir(p: Path) -> bool:
-            return p.exists() and any(f.exists() for f in p.glob("*.hf5"))
+        subject_dir = derivatives_path / "preprocessed_data" / subject_id
+        if not subject_dir.exists():
+            subject_dir = derivatives_path / "preprocessed_data" / f"sub-{subject_id}"
             
-        subject_dir = derivatives_path / "preprocessed_data" / sub_id
-        subject = sub_id
-        if not is_valid_dir(subject_dir):
-             alt_dir = derivatives_path / "preprocessed_data" / uts_id
-             if is_valid_dir(alt_dir):
-                  subject_dir = alt_dir
-                  subject = uts_id
-             elif alt_dir.exists():
-                  # Fallback to the one that exists even if broken (gives better error msg later)
-                  subject_dir = alt_dir
-                  subject = uts_id
-            
-        stories = [s.stimulus_id for s in benchmark.stimuli] # Stimulus ID holds the story name
+        stories = [s.stimulus_id for s in benchmark.stimuli] 
         unique_stories = sorted(list(set(stories)))
         
-        # 2. Check cache
+        # 3. Check cache
         config = {
             "kind": "huth-source",
-            "subject": subject,
+            "subject": subject_id,
             "stories": unique_stories,
             "ds_root": str(self.ds_root),
         }
@@ -128,7 +115,7 @@ class HuthRecordingSource(HumanRecordingSource):
         if self.use_cache:
             cached = load_cache("datasets", config=config)
             if cached is not None:
-                logger.info(f"Loaded cached Huth recordings for {subject}")
+                logger.info(f"Loaded cached Huth recordings for {subject_id}")
                 return HumanRecordingData(
                     values=cached["values"],
                     stimulus_ids=list(cached["stimulus_ids"]),
@@ -137,16 +124,17 @@ class HuthRecordingSource(HumanRecordingSource):
                     category=DataCategory.TOKEN_LEVEL,
                 )
 
-        logger.info(f"Loading Huth BOLD data for {subject} from {subject_dir}")
+        # 4. Load from Disk
+        logger.info(f"Loading Huth BOLD data for {subject_id} from {subject_dir}")
         all_values = []
         all_story_ids = []
         all_rois = {}
         
         for story in unique_stories:
             resp_path = subject_dir / f"{story}.hf5"
-            logger.info(f"Checking for BOLD data at: {resp_path}")
-            if not resp_path.exists():
-                logger.warning(f"Response file not found (or broken symlink): {resp_path}")
+            # Robustness: Check if file exists and is not a broken symlink (size > 0)
+            if not resp_path.exists() or resp_path.stat().st_size < 1e6:
+                logger.warning(f"Response file not found or appears to be a broken symlink: {resp_path}. Make sure datalad get was successful.")
                 continue
                 
             with h5py.File(resp_path, "r") as hf:
@@ -154,29 +142,23 @@ class HuthRecordingSource(HumanRecordingSource):
                 all_values.append(data.astype(np.float32))
                 all_story_ids.append(story)
                 
-                # Extract all ROI masks (datasets starting with 'roi_')
+                # Extract all ROI masks
                 for key in hf.keys():
                     if key.startswith("roi_"):
                         mask = hf[key][:]
                         if key not in all_rois:
-                            # Use torch.bool for ROI masks
                             all_rois[key] = torch.as_tensor(mask, dtype=torch.bool)
         
         if not all_values:
-            msg = f"No BOLD data found for subject {subject} in {subject_dir}."
-            if any(subject_dir.glob("*.hf5")):
-                msg += " Found .hf5 files but they may be broken symlinks (datalad get failed)."
-            else:
-                msg += " No .hf5 files found in the directory."
-            raise FileNotFoundError(msg)
+            raise FileNotFoundError(f"No valid BOLD data found for subject {subject_id} in {subject_dir}. Please run datalad get.")
             
         feature_ids = [f"voxel-{i}" for i in range(all_values[0].shape[1])]
         
         recorded_data = HumanRecordingData(
-            values=all_values, # List of arrays (stories)
+            values=all_values,
             stimulus_ids=all_story_ids,
             feature_ids=feature_ids,
-            metadata={"subject": subject, "stories": unique_stories, "rois": all_rois},
+            metadata={"subject": subject_id, "stories": unique_stories, "rois": all_rois},
             category=DataCategory.TOKEN_LEVEL,
         )
         
