@@ -16,6 +16,7 @@ from convminds.nn.metrics import calculate_nlp_metrics, identification_accuracy
 from convminds.transforms.pca import VoxelPCA
 from convminds.transforms.timeseries import TrimTRs
 from transformers import GPT2Tokenizer, GPT2Model
+import argparse
 
 # Configure logging (using INFO for clean dashboard)
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
@@ -360,39 +361,65 @@ if __name__ == "__main__":
 
     results_comparison = {}
 
+    # --- ARGUMENT PARSING ---
+    parser = argparse.ArgumentParser(description="Brain-to-LLM VAE Adapter training.")
+    parser.add_argument("--mode", type=str, choices=["two_phase", "one_phase", "both"], default="both",
+                        help="Execution mode: 'two_phase' (VAE -> Align), 'one_phase' (Direct Align), or 'both'.")
+    args = parser.parse_args()
+
     # --- EXECUTION ---
-    # Model A: Sequential (VAE -> Align)
-    model_a, stats_a = run_experiment("Model_A (Sequential)", use_vae_warmup=True)
+    stats_a, stats_b = {}, {}
+    model_a, model_b = None, None
     
-    # Model B: Direct (Align only)
-    model_b, stats_b = run_experiment("Model_B (Direct Align)", use_vae_warmup=False)
+    if args.mode in ["two_phase", "both"]:
+        # Model A: Sequential (VAE -> Align)
+        model_a, stats_a = run_experiment("Model_A (Sequential)", use_vae_warmup=True)
+    
+    if args.mode in ["one_phase", "both"]:
+        # Model B: Direct (Align only)
+        model_b, stats_b = run_experiment("Model_B (Direct Align)", use_vae_warmup=False)
 
     # Comparison Report
     logger.info("\n" + "="*60)
     logger.info("FINAL ABLATION COMPARISON REPORT")
     logger.info("="*60)
-    logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15} | {'Model B (Dir)':<15}")
+    
+    if args.mode == "both":
+        logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15} | {'Model B (Dir)':<15}")
+    elif args.mode == "two_phase":
+        logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15}")
+    else:
+        logger.info(f"{'Metric':<20} | {'Model B (Dir)':<15}")
+        
     logger.info("-" * 60)
     # Filter for interesting metrics
     metrics_to_show = ["mse_align", "cosine", "top10_acc", "bleu", "rouge-1", "rouge-L", "wer", "meteor"]
     for k in metrics_to_show:
-        # Standardize keys for the report
         key = k.replace("-", "") if k != "rouge-L" else "rougeL"
-        if key == "rouge1": key="rouge1" # No-op just to be clear
+        if key == "rouge1": key="rouge1"
         
-        if key in stats_a:
+        row = f"{k:<20} | "
+        if args.mode in ["two_phase", "both"]:
             val_a = stats_a[key]
-            val_b = stats_b[key]
-            # Use percentage for certain metrics
             if key in ["top10_acc", "bleu", "rouge1", "rougeL", "meteor"]:
-                logger.info(f"{k:<20} | {val_a*100:<14.2f}% | {val_b*100:<14.2f}%")
+                row += f"{val_a*100:<14.2f}% | "
             else:
-                logger.info(f"{k:<20} | {val_a:<15.4f} | {val_b:<15.4f}")
+                row += f"{val_a:<15.4f} | "
+        
+        if args.mode in ["one_phase", "both"]:
+            val_b = stats_b[key]
+            if key in ["top10_acc", "bleu", "rouge1", "rougeL", "meteor"]:
+                row += f"{val_b*100:<14.2f}%"
+            else:
+                row += f"{val_b:<15.4f}"
+        
+        logger.info(row)
     logger.info("="*60)
     
-    # track first batch samples for A
+    # samples tracking
+    final_model = model_a if args.mode in ["two_phase", "both"] else model_b
     test_samples = []
-    model_a.eval()
+    final_model.eval()
     with torch.no_grad():
         for batch in test_loader:
             x = batch["bold"].to(device)
