@@ -86,6 +86,7 @@ def main():
     
     for epoch in range(1, total_epochs + 1):
         model.train()
+        epoch_losses = []
         # Phase logic: 
         # If '10,10' -> Epoch 1-10 is Phase 1 (VAE Recon if use_vae), 11-20 is Phase 2 (Align)
         if len(phase_epochs) > 1:
@@ -125,7 +126,12 @@ def main():
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            epoch_losses.append(loss.item())
             pbar.set_postfix(loss_dict)
+
+        # End of epoch summary
+        avg_loss = np.mean(epoch_losses)
+        logger.info(f"Epoch {epoch:2d}/{total_epochs} completed | Phase {phase} | Avg Loss: {avg_loss:.4f}")
 
     # 4. Final Evaluation
     logger.info("\n" + "="*40)
