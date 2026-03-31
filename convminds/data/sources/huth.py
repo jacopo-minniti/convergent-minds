@@ -25,6 +25,50 @@ class TextGrid:
         self._parse(content)
 
     def _parse(self, content: str):
+        if "Praat chronological TextGrid text file" in content:
+            self._parse_chronological(content)
+        else:
+            self._parse_standard(content)
+
+    def _parse_chronological(self, content: str):
+        # Format: interleaved lines: "TierID xmin xmax \n "Text"
+        lines = [l.strip() for l in content.splitlines() if l.strip()]
+        if not lines: return
+        
+        # 1. Map Tier IDs to Names
+        # Skip header, find lines like: "IntervalTier" "phone" 0.01 955.0
+        tier_defs = []
+        for line in lines:
+            m = re.search(r'"IntervalTier"\s*"(.*?)"\s*([\d\.\-\+e]+)\s*([\d\.\-\+e]+)', line)
+            if m:
+                tier_defs.append({"name": m.group(1).lower(), "intervals": []})
+        
+        if not tier_defs: return
+        
+        # 2. Parse interleaved intervals
+        # An interval is usually "ID xmin xmax" followed by "Text"
+        # We start looking after the tier definitions
+        for i in range(len(lines)):
+            # Check if this line is "ID xmin xmax" (3 floats)
+            parts = lines[i].split()
+            if len(parts) >= 3 and parts[0].isdigit() and i + 1 < len(lines):
+                try:
+                    tid = int(parts[0])
+                    xmin = float(parts[1])
+                    xmax = float(parts[2])
+                    # The text is on the NEXT line, usually in quotes
+                    text = lines[i+1].strip('"')
+                    
+                    if 0 < tid <= len(tier_defs):
+                        tier_defs[tid-1]["intervals"].append({
+                            "xmin": xmin, "xmax": xmax, "text": text
+                        })
+                except (ValueError, IndexError):
+                    continue
+        
+        self.tiers = tier_defs
+
+    def _parse_standard(self, content: str):
         # 1. Split into tier blocks (item [1]:, item [2]:, etc.)
         item_blocks = re.split(r'item\s*\[\s*\d+\s*\]\s*:?', content)
         
@@ -61,11 +105,6 @@ class TextGrid:
             if intervals:
                 self.tiers.append({"name": tier_name, "intervals": intervals})
                 logger.debug(f"Parsed tier {tier_name} with {len(intervals)} intervals.")
-            else:
-                logger.debug(f"Found tier {tier_name} but zero valid intervals were parsed.")
-        
-        if not self.tiers:
-            logger.warning("No tiers found or parsed in TextGrid content.")
 
     def get_tier(self, name: str):
         name = name.lower()
