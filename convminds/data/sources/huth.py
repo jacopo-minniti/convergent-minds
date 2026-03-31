@@ -134,7 +134,7 @@ class HuthRecordingSource(HumanRecordingSource):
                 logger.error(f"File missing after ensure_data: {resp_path}")
                 continue
                 
-            if resp_path.lstat().st_size < 1000:
+            if not resp_path.exists():
                 logger.warning(f"File {story}.hf5 is hollow. This subject was not fully materialized in ensure_data.")
                 continue
                 
