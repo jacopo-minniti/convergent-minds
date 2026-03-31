@@ -16,8 +16,8 @@ from convminds.transforms.pca import VoxelPCA
 from convminds.transforms.timeseries import TrimTRs
 from transformers import GPT2Tokenizer, GPT2Model
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+# Configure logging (removed datetime for clean dashboard)
+logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 class GPT2Embedder:
@@ -30,22 +30,42 @@ class GPT2Embedder:
         self.wte = self.model.wte
 
     @torch.no_grad()
-    def embed(self, texts):
-        # texts is a list of strings
-        # We need the mean of token embeddings for each text
+    def embed_with_context(self, context_texts, target_texts):
+        """
+        Embeds the target_texts given the context_texts. 
+        Returns the mean of the hidden states for the tokens in target_text.
+        """
         all_embeddings = []
-        for t in texts:
-            if not t.strip():
+        for ctx, target in zip(context_texts, target_texts):
+            # Combined text: "Context Target"
+            full_text = (ctx.strip() + " " + target.strip()).strip()
+            if not full_text:
                 all_embeddings.append(torch.zeros(1, 768).to(self.device))
                 continue
                 
-            inputs = self.tokenizer(t, return_tensors="pt").to(self.device)
-            # Extract raw token embeddings
-            # (Batch, SeqLen, 768)
-            token_embeds = self.wte(inputs.input_ids)
-            # Mean pool across tokens
-            mean_embed = token_embeds.mean(dim=1) # (1, 768)
-            all_embeddings.append(mean_embed)
+            inputs = self.tokenizer(full_text, return_tensors="pt").to(self.device)
+            # Use the full model to get hidden states (context-aware)
+            outputs = self.model(**inputs)
+            # (Batch=1, SeqLen, 768)
+            hidden_states = outputs.last_hidden_state
+            
+            # We want the embeddings corresponding to the TARGET words
+            # Simple heuristic: take the last few tokens that match the target length
+            # or just take the mean of the whole sequence if target is small.
+            # Most accurate is to find where context ends, but mean of full sequence 
+            # is a robust proxy for 'the state of the story at TR X'.
+            target_ids = self.tokenizer(target.strip(), add_special_tokens=False).input_ids
+            num_target_tokens = len(target_ids)
+            
+            if num_target_tokens > 0:
+                # Take the last N tokens (the target)
+                target_hidden = hidden_states[:, -num_target_tokens:, :]
+                mean_target = target_hidden.mean(dim=1)
+            else:
+                # If target is empty (silence), take the last state of context
+                mean_target = hidden_states[:, -1:, :]
+                
+            all_embeddings.append(mean_target.squeeze(1))
             
         return torch.cat(all_embeddings, dim=0)
 
@@ -141,11 +161,17 @@ class HuthVaeDataset(Dataset):
                 self.story_metadata[story_name] = record.metadata
                 actual_trs = self.bold_data[subj][story_name].shape[0]
                 
-                # Valid TRs t for windows [t:t+4] and Text at t-4
-                # Start: t-4 >= 0 => t >= 4. Also trim=5 => t >= 5.
-                # End: t+4 < actual_trs. Also trim=5 => t < actual_trs - 5.
-                for t in range(self.trim, actual_trs - self.trim - 4):
-                    self.all_samples.append((subj, story_name, t))
+                # ALIGNMENT STRUCTURE:
+                # Target TR: x
+                # Context TRs: [x-3, x-2, x-1] (Prompt)
+                # Target Text: Words in TR x
+                # Brain Input: BOLD in [x+1, x+2, x+3, x+4]
+                
+                # Limits: 
+                # Start: x-3 >= 0 => x >= 3
+                # End: x+4 < actual_trs => x < actual_trs - 4
+                for x in range(3, actual_trs - 4):
+                    self.all_samples.append((subj, story_name, x))
         
         logger.info(f"Preprocessing complete. Total samples: {len(self.all_samples)}")
         
@@ -154,36 +180,40 @@ class HuthVaeDataset(Dataset):
         return len(self.all_samples)
 
     def __getitem__(self, index):
-        subj, story, t = self.all_samples[index]
+        subj, story, x = self.all_samples[index]
         
-        # INPUT fMRI: 4 TR window [t:t+4]
-        bold_window = self.bold_data[subj][story][t:t+4]
-        
-        # TARGET TEXT: Perception at time T-4 mapped to BOLD at T
-        target_t = t - 4 
+        # BRAIN INPUT: 4 TR window after target stimulus [x+1:x+1+4]
+        bold_window = self.bold_data[subj][story][x+1:x+5]
         
         metadata = self.story_metadata[story]
         tr_times = metadata["tr_times"]
         word_intervals = metadata["word_intervals"]
         
-        t_start = tr_times[target_t]
-        t_end = tr_times[target_t+1] if target_t+1 < len(tr_times) else tr_times[-1] + 2.0
-        t_win = (t_start, t_end)
+        # Helper to get words in a TR range
+        def get_words(tr_start, tr_end):
+            t_start = tr_times[tr_start]
+            t_end = tr_times[tr_end+1] if tr_end+1 < len(tr_times) else tr_times[-1] + 2.0
+            
+            noise_tokens = {"sp", "uh", "um"}
+            words = [i["text"].lower().strip() for i in word_intervals 
+                     if i["xmin"] >= t_start and i["xmin"] < t_end]
+            words = [w for w in words if w not in noise_tokens and len(w) > 0]
+            return " ".join(words) if words else ""
 
-        # Clean tokens to remove silence cues (sp) and non-semantic fillers
-        noise_tokens = {"sp", "uh", "um"}
-        context_words = [i["text"].lower().strip() for i in word_intervals 
-                        if i["xmin"] >= t_start and i["xmin"] < t_end]
-        context_words = [w for w in context_words if w not in noise_tokens and len(w) > 0]
-        context_text = " ".join(context_words) if context_words else " "
+        # CONTEXT: TRs [x-3, x-2, x-1]
+        context_text = get_words(x-3, x-1)
+        
+        # TARGET: TR x
+        target_text = get_words(x, x)
         
         return {
             "bold": torch.from_numpy(bold_window).float(), # (4, 1000)
-            "text": context_text,
+            "context": context_text,
+            "target": target_text,
             "subject": subj,
             "story": story,
-            "tr": t,
-            "time_window": t_win
+            "tr": x,
+            "time_window": (tr_times[x], tr_times[x+1] if x+1 < len(tr_times) else tr_times[x]+2.0)
         }
 
 if __name__ == "__main__":
@@ -241,22 +271,20 @@ if __name__ == "__main__":
             model.train()
             epoch_losses = {"rec": [], "align": []}
             
-            # Logic: 
-            # Model A (use_vae_warmup=True): 1-10 Recon, 11-20 Align
-            # Model B (use_vae_warmup=False): 1-20 Align
+            # Model A: 1-10 Recon, 11-20 Align
+            # Model B: 1-20 Align
             if use_vae_warmup:
                 phase = 1 if epoch <= 10 else 2
             else:
                 phase = 2
             
-            pbar = tqdm(train_loader, desc=f"[{exp_name}] Ep {epoch:2d} Ph {phase}")
+            pbar = tqdm(train_loader, desc=f"[{exp_name}] Ep {epoch:2d}")
             for batch in pbar:
                 x = batch["bold"].to(device)
-                h_text = embedder.embed(batch["text"]).to(device)
+                h_text = embedder.embed_with_context(batch["context"], batch["target"]).to(device)
                 outputs = model(x)
                 
                 if phase == 1:
-                    # Reconstruction Task
                     criterion.rec_weight = 1.0
                     criterion.kl_weight = 0.005
                     criterion.align_weight = 0.0
@@ -270,8 +298,6 @@ if __name__ == "__main__":
                     )
                     loss = metrics["loss"]
                 else:
-                    # Alignment Task (using InfoNCE)
-                    # We utilize the 'z' or 'mu' for alignment. 'mu' is more stable.
                     loss = info_nce_loss(outputs["mu"], h_text)
                     metrics = {"rec_loss": torch.tensor(0.0), "align_loss": loss}
 
@@ -285,43 +311,92 @@ if __name__ == "__main__":
                     epoch_losses["align"].append(metrics["align_loss"].item())
             
             scheduler.step()
-            
-            # Compact Logging
             if phase == 1:
-                logger.info(f"Ep {epoch:2d} | Train MSE (Recon): {np.mean(epoch_losses['rec']):.4f}")
+                logger.info(f"Ep {epoch:2d} | Ph 1 | Train MSE (Recon): {np.mean(epoch_losses['rec']):.4f}")
             else:
-                logger.info(f"Ep {epoch:2d} | Train InfoNCE (Align): {np.mean(epoch_losses['align']):.4f}")
+                logger.info(f"Ep {epoch:2d} | Ph 2 | Train InfoNCE (Align): {np.mean(epoch_losses['align']):.4f}")
 
-        # Final Eval
         stats = run_eval(model, test_loader)
         results_comparison[exp_name] = stats
         return model, stats
+    def calculate_nlp_metrics(pred_text, target_text):
+        """Calculates BLEU-1, ROUGE-1, and WER for a single pair of texts."""
+        def tokenize(t): return t.lower().split()
+        p_toks, t_toks = tokenize(pred_text), tokenize(target_text)
+        if not t_toks: return {"bleu": 0.0, "rouge": 0.0, "wer": 0.0}
+        if not p_toks: return {"bleu": 0.0, "rouge": 0.0, "wer": 1.0}
+        
+        # 1. ROUGE-1 (Recall)
+        matches = len([w for w in p_toks if w in t_toks])
+        rouge = matches / len(t_toks)
+        
+        # 2. BLEU-1 (Precision + Brevity Penalty)
+        precision = matches / len(p_toks)
+        bp = 1.0 if len(p_toks) >= len(t_toks) else np.exp(1 - len(t_toks)/len(p_toks))
+        bleu = precision * bp
+        
+        # 3. WER (Word Error Rate - Levenshtein distance)
+        d = np.zeros((len(t_toks)+1, len(p_toks)+1))
+        for i in range(len(t_toks)+1): d[i,0] = i
+        for j in range(len(p_toks)+1): d[0,j] = j
+        for i in range(1, len(t_toks)+1):
+            for j in range(1, len(p_toks)+1):
+                if t_toks[i-1] == p_toks[j-1]: d[i,j] = d[i-1,j-1]
+                else: d[i,j] = min(d[i-1,j]+1, d[i,j-1]+1, d[i-1,j-1]+1)
+        wer = d[len(t_toks), len(p_toks)] / len(t_toks)
+        
+        return {"bleu": bleu, "rouge": rouge, "wer": min(wer, 1.0)}
 
     def run_eval(model, loader):
         model.eval()
-        results = {"mse_recon": [], "mse_align": [], "cosine": [], "corr": [], "top10_acc": []}
+        results = {"mse_recon": [], "mse_align": [], "cosine": [], 
+                   "top10_acc": [], "bleu": [], "rouge": [], "wer": []}
+        
+        # We collect all batch results to run retrieval-based decoding
+        all_mus, all_targets, all_texts = [], [], []
+        
         with torch.no_grad():
             for batch in loader:
                 x = batch["bold"].to(device)
-                h_text = embedder.embed(batch["text"]).to(device)
+                h_text = embedder.embed_with_context(batch["context"], batch["target"]).to(device)
                 outputs = model(x)
                 
                 results["mse_recon"].append(torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"])).item())
                 results["mse_align"].append(torch.mean(torch.square(outputs["mu"] - h_text)).item())
                 results["cosine"].append(F.cosine_similarity(outputs["mu"], h_text, dim=-1).mean().item())
                 
-                # Correlation
-                flat_hat = outputs["x_hat"].cpu().numpy()
-                flat_orig = outputs["x_orig"].cpu().numpy()
-                results["corr"].append(np.corrcoef(flat_hat.flatten(), flat_orig.flatten())[0, 1])
-                
                 # Identification Acc
                 if outputs["mu"].shape[0] > 1:
-                    cos_sim_matrix = F.cosine_similarity(outputs["mu"].unsqueeze(1), h_text.unsqueeze(0), dim=-1) # (B, B)
+                    cos_sim_matrix = F.cosine_similarity(outputs["mu"].unsqueeze(1), h_text.unsqueeze(0), dim=-1)
                     for i in range(cos_sim_matrix.shape[0]):
                         top10 = torch.topk(cos_sim_matrix[i], k=min(10, cos_sim_matrix.shape[0])).indices
                         results["top10_acc"].append(1.0 if i in top10 else 0.0)
+                
+                all_mus.append(outputs["mu"])
+                all_targets.append(h_text)
+                all_texts.extend(batch["target"])
+        
+        # Retrieval-based NLP Decoding
+        # For each mu, find the closest target embedding in the bank
+        full_mus = torch.cat(all_mus, dim=0)
+        full_targets = torch.cat(all_targets, dim=0)
+        
+        # Cosine similarity matrix between all predicted brain states and all possible text embeddings
+        scores = F.cosine_similarity(full_mus.unsqueeze(1), full_targets.unsqueeze(0), dim=-1)
+        for i in range(len(all_texts)):
+            # Pick the best text match (excluding self distance check, we want generalization)
+            best_match_idx = torch.argmax(scores[i]).item()
+            best_text = all_texts[best_match_idx]
+            ground_truth = all_texts[i]
+            
+            metrics = calculate_nlp_metrics(best_text, ground_truth)
+            results["bleu"].append(metrics["bleu"])
+            results["rouge"].append(metrics["rouge"])
+            results["wer"].append(metrics["wer"])
+            
         return {k: np.mean(v) if v else 0.0 for k, v in results.items()}
+
+    results_comparison = {}
 
     # --- EXECUTION ---
     # Model A: Sequential (VAE -> Align)
@@ -331,14 +406,23 @@ if __name__ == "__main__":
     model_b, stats_b = run_experiment("Model_B (Direct Align)", use_vae_warmup=False)
 
     # Comparison Report
-    logger.info("\n" + "="*50)
-    logger.info("ABLATION COMPARISON REPORT")
-    logger.info("="*50)
+    logger.info("\n" + "="*60)
+    logger.info("FINAL ABLATION COMPARISON REPORT")
+    logger.info("="*60)
     logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15} | {'Model B (Dir)':<15}")
-    logger.info("-" * 55)
-    for k in stats_a.keys():
-        logger.info(f"{k:<20} | {stats_a[k]:<15.4f} | {stats_b[k]:<15.4f}")
-    logger.info("="*50)
+    logger.info("-" * 60)
+    # Filter for interesting metrics
+    metrics_to_show = ["mse_align", "cosine", "top10_acc", "bleu", "rouge", "wer"]
+    for k in metrics_to_show:
+        if k in stats_a:
+            val_a = stats_a[k]
+            val_b = stats_b[k]
+            # Use percentage for certain metrics
+            if k in ["top10_acc", "bleu", "rouge"]:
+                logger.info(f"{k:<20} | {val_a*100:<14.2f}% | {val_b*100:<14.2f}%")
+            else:
+                logger.info(f"{k:<20} | {val_a:<15.4f} | {val_b:<15.4f}")
+    logger.info("="*60)
     
     # track first batch samples for A
     test_samples = []
@@ -346,15 +430,19 @@ if __name__ == "__main__":
     with torch.no_grad():
         for batch in test_loader:
             x = batch["bold"].to(device)
-            texts = batch["text"]
+            contexts = batch["context"]
+            targets = batch["target"]
             outputs = model_a(x)
-            for j in range(min(2, len(texts))):
-                hat_vals = outputs["mu"][j][:5].detach().cpu().numpy() # Using MU as proxy for alignment state
-                orig_vals = embedder.embed([texts[j]])[0, :5].detach().cpu().numpy()
+            h_text_batch = embedder.embed_with_context(contexts, targets)
+            
+            for j in range(min(2, len(targets))):
+                hat_vals = outputs["mu"][j][:5].detach().cpu().numpy()
+                orig_vals = h_text_batch[j, :5].detach().cpu().numpy()
                 test_samples.append({
                     "id": f"{batch['subject'][j]} | {batch['story'][j]} | TR {batch['tr'][j]}",
-                    "text": texts[j],
-                    "w_count": len(texts[j].split()),
+                    "context": contexts[j],
+                    "target": targets[j],
+                    "w_count": len(targets[j].split()),
                     "time": batch["time_window"][j],
                     "hat_pca": hat_vals,
                     "orig_pca": orig_vals
@@ -365,7 +453,8 @@ if __name__ == "__main__":
     for i, s in enumerate(test_samples):
         logger.info(f"Sample: {s['id']}")
         logger.info(f"  Time Window:  {s['time'][0].item():.1f}s -> {s['time'][1].item():.1f}s")
-        logger.info(f"  Context Text: \"{s['text']}\" ({s['w_count']} words)")
+        logger.info(f"  Context Text: \"{s['context']}\"")
+        logger.info(f"  Target Text:  \"{s['target']}\" ({s['w_count']} words)")
         logger.info(f"  Latent (Align-mu, First 5): {s['hat_pca']}")
         logger.info(f"  Target (LLM-WTE, First 5):  {s['orig_pca']}")
         # Calculate local Pearson for these 5
