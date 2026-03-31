@@ -113,11 +113,19 @@ class HuthBenchmark(BaseBenchmark):
 
         # 3. Get BOLD data for subject if not present or hollow
         subj_dir = self.huth_dir / "derivatives" / "preprocessed_data" / self.subject_id
-        if not subj_dir.exists() or not any(f.is_file() and f.stat().st_size > 1e6 for f in subj_dir.glob("*.hf5")):
-            logger.info(f"Materializing BOLD data for {self.subject_id}...")
-            self._run_datalad(["get", "-r", f"derivatives/preprocessed_data/{self.subject_id}"], self.huth_dir)
+        hf5_files = list(subj_dir.glob("*.hf5"))
+        
+        # Determine if we need to get data:
+        # 1. Folder doesn't exist
+        # 2. Folder exists but no .hf5 files
+        # 3. Folder exists, but contains at least one hollow symlink
+        needs_get = not subj_dir.exists() or not hf5_files or any(f.stat().st_size < 1000 for f in hf5_files)
+        
+        if needs_get:
+            logger.info(f"Materializing COMPLETE subject folder for {self.subject_id} (recursive)...")
+            self._run_datalad(["get", f"derivatives/preprocessed_data/{self.subject_id}"], self.huth_dir)
              
-        logger.info("Huth data ready.")
+        logger.info("Huth data ready (all stories verified).")
 
 
     def _load_or_prepare_stimuli(self) -> StimulusSet:

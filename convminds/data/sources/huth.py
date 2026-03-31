@@ -126,15 +126,17 @@ class HuthRecordingSource(HumanRecordingSource):
         all_story_ids = []
         all_rois = {}
         
-        for story in stories:
+        for i, story in enumerate(stories):
+            logger.info(f"[{i+1}/{len(stories)}] Loading: {story}...")
             resp_path = subject_dir / f"{story}.hf5"
-            logger.debug(f"Checking {resp_path}")
             
-            # Simple datalad get if file is hollow or missing
-            if not resp_path.exists() or resp_path.stat().st_size < 1000:
-                logger.info(f"Materializing {story}.hf5 via datalad...")
-                rel_path = f"derivatives/preprocessed_data/{subject_id}/{story}.hf5"
-                subprocess.run(["datalad", "get", rel_path], cwd=str(self.ds_root), capture_output=True)
+            if not resp_path.exists():
+                logger.error(f"File missing after ensure_data: {resp_path}")
+                continue
+                
+            if resp_path.stat().st_size < 1000:
+                logger.warning(f"File {story}.hf5 is hollow. This subject was not fully materialized in ensure_data.")
+                continue
                 
             try:
                 with h5py.File(resp_path, "r") as hf:
