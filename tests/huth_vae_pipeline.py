@@ -14,7 +14,7 @@ from convminds.models.vae_adapter import VaeBrainAdapter
 from convminds.nn.losses import TripartiteVAELoss
 from convminds.transforms.pca import VoxelPCA
 from convminds.transforms.timeseries import TrimTRs
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import GPT2Tokenizer, GPT2Model
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
@@ -130,7 +130,6 @@ class HuthVaeDataset(Dataset):
                 projected = (projected - mean) / std
                 
                 self.bold_data[subj][story_name] = projected
-                logger.debug(f"  Story {story_name} projected stats: Mean={projected.mean():.4f}, Std={projected.std():.4f}, Max={projected.max():.4f}")
                 
             # 4. GATHER STIMULUS ALIGNMENT
             # Use metadata to align brain with words
