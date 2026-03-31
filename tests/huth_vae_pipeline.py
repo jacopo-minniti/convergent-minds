@@ -21,21 +21,33 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(n
 logger = logging.getLogger(__name__)
 
 class GPT2Embedder:
-    """Extracts mean-pooled last hidden states from GPT-2 small."""
-    def __init__(self, model_id="gpt2", device="cuda"):
+    def __init__(self, model_name="gpt2", device="cpu"):
+        self.tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+        self.model = GPT2Model.from_pretrained(model_name).to(device).eval()
         self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.model = AutoModelForCausalLM.from_pretrained(model_id).to(device)
-        self.model.eval()
+        
+        # We want the token embedding layer specifically for Phase 2 targets
+        self.wte = self.model.wte
 
     @torch.no_grad()
-    def embed(self, texts: list[str]) -> torch.Tensor:
-        encoded = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True).to(self.device)
-        output = self.model(**encoded, output_hidden_states=True)
-        # pooled: mean across time dimension of the last hidden state
-        pooled = output.hidden_states[-1].mean(dim=1)
-        return pooled.cpu()
+    def embed(self, texts):
+        # texts is a list of strings
+        # We need the mean of token embeddings for each text
+        all_embeddings = []
+        for t in texts:
+            if not t.strip():
+                all_embeddings.append(torch.zeros(1, 768).to(self.device))
+                continue
+                
+            inputs = self.tokenizer(t, return_tensors="pt").to(self.device)
+            # Extract raw token embeddings
+            # (Batch, SeqLen, 768)
+            token_embeds = self.wte(inputs.input_ids)
+            # Mean pool across tokens
+            mean_embed = token_embeds.mean(dim=1) # (1, 768)
+            all_embeddings.append(mean_embed)
+            
+        return torch.cat(all_embeddings, dim=0)
 
 class HuthVaeDataset(Dataset):
     """
@@ -130,9 +142,9 @@ class HuthVaeDataset(Dataset):
                 self.story_metadata[story_name] = record.metadata
                 actual_trs = self.bold_data[subj][story_name].shape[0]
                 
-                # Valid TRs t for windows [t-2:t+1] and BOLD [t+1:t+5]
-                # Start: t-2 >= 0 => t >= 2. Also trim=5 => t >= 5.
-                # End: t+1 < actual_trs and t+5 < actual_trs => t+4 < actual_trs. Also trim=5 => t < actual_trs - 5.
+                # Valid TRs t for windows [t:t+4] and Text at t-4
+                # Start: t-4 >= 0 => t >= 4. Also trim=5 => t >= 5.
+                # End: t+4 < actual_trs. Also trim=5 => t < actual_trs - 5.
                 for t in range(self.trim, actual_trs - self.trim - 4):
                     self.all_samples.append((subj, story_name, t))
         
@@ -145,36 +157,26 @@ class HuthVaeDataset(Dataset):
     def __getitem__(self, index):
         subj, story, t = self.all_samples[index]
         
-        # BOLD: [t+1, t+2, t+3, t+4] -> (4, 1000)
-        bold_window = self.bold_data[subj][story][t+1:t+5]
+        # INPUT fMRI: 4 TR window [t:t+4]
+        bold_window = self.bold_data[subj][story][t:t+4]
         
-        # Safety check: ensure uniform length (should never happen now)
-        if bold_window.shape[0] != 4:
-            # Fallback to absolute index 0 if something is wrong (better than crash)
-            return self.__getitem__(0)
+        # TARGET TEXT: Perception at time T-4 mapped to BOLD at T
+        target_t = t - 4 
         
-        # TEXT context: [t-2, t-1, t] (Approx 6s)
-        # Using the intervals in metadata
         metadata = self.story_metadata[story]
         tr_times = metadata["tr_times"]
         word_intervals = metadata["word_intervals"]
         
-        # Define window boundaries [t_start, t_end]
-        # t-2 starts at tr_times[t-2], t ends at tr_times[t+1]? 
-        # Actually Huth TRs are midpoint centered? 
-        # Let's say we take words between tr_times[t-2] and tr_times[t+1]
-        t_start = tr_times[t-2]
-        t_end = tr_times[t+1] if t+1 < len(tr_times) else tr_times[-1] + 2.0
-        
+        t_start = tr_times[target_t]
+        t_end = tr_times[target_t+1] if target_t+1 < len(tr_times) else tr_times[-1] + 2.0
+        t_win = (t_start, t_end)
+
         # Clean tokens to remove silence cues (sp) and non-semantic fillers
         noise_tokens = {"sp", "uh", "um"}
         context_words = [i["text"].lower().strip() for i in word_intervals 
                         if i["xmin"] >= t_start and i["xmin"] < t_end]
         context_words = [w for w in context_words if w not in noise_tokens and len(w) > 0]
         context_text = " ".join(context_words) if context_words else " "
-        
-        # Add time window info for diagnostics
-        t_win = (t_start, t_end)
         
         return {
             "bold": torch.from_numpy(bold_window).float(), # (4, 1000)
@@ -216,59 +218,76 @@ if __name__ == "__main__":
     
     # 3. Model & Loss (Tripartite)
     model = VaeBrainAdapter(input_dim=1000, n_frames=4, latent_dim=768).to(device)
-    # Simplified Loss: Only MSE/Reconstruction for now to verify capacity
-    loss_fn = TripartiteVAELoss(rec_weight=1.0, kl_weight=0.0, align_weight=0.0).to(device)
     
-    # 4. Optimization
-    # We must optimize both the model parameters AND the learnable loss parameters (for temperature)
-    optimizer = AdamW(
-        list(model.parameters()) + list(loss_fn.parameters()), 
-        lr=3e-4, 
-        weight_decay=0.01
-    )
-    scheduler = CosineAnnealingLR(optimizer, T_max=100) # Simplified scheduler for brevity
+    # 7. TRAINING LOOP (Phases 1 & 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    criterion = TripartiteVAELoss()
+    scheduler = CosineAnnealingLR(optimizer, T_max=20)
     
-    logger.info("Starting Training Loop...")
-    for epoch in range(1, 6): # Reduced to 5 epochs for speed
+    total_epochs = 20
+    logger.info(f"Starting Training Loop ({total_epochs} epochs)...")
+    
+    for epoch in range(1, total_epochs + 1):
         model.train()
-        epoch_losses = {
-            "loss": [],
-            "recon": [],
-            "kl": [],
-            "align": []
-        }
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch}", leave=False):
-            # x: BOLD features (batch, 4, 1000)
+        epoch_losses = {"total": [], "rec": [], "kl": [], "align": []}
+        
+        # Phase 1: Manifold Warm-up (Epochs 1-5)
+        # Phase 2: Embedding Alignment (Epochs 6-20)
+        phase = 1 if epoch <= 5 else 2
+        
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch} (Phase {phase})")
+        for batch in pbar:
             x = batch["bold"].to(device)
             texts = batch["text"]
             
-            # a) Get Text Targets
-            h_text = embedder.embed(texts).to(device) # (B, 768)
+            # Target GPT-2 Embeddings (Mean of token embeddings)
+            h_text = embedder.embed(texts)
             
-            # b) VAE Forward
             outputs = model(x)
             
-            # c) Loss
-            metrics = loss_fn(
-                recon_x=outputs["x_hat"], 
-                x=outputs["x_orig"], 
-                mu=outputs["mu"], 
-                logvar=outputs["logvar"],
-                z=outputs["z"],
-                h_text=h_text
-            )
+            if phase == 1:
+                # Standard ELBO: MSE + beta*KL
+                metrics = criterion(
+                    x_hat=outputs["x_hat"],
+                    x_orig=outputs["x_orig"],
+                    mu=outputs["mu"],
+                    logvar=outputs["logvar"],
+                    rec_weight=1.0,
+                    kl_weight=0.01,
+                    align_weight=0.0
+                )
+            else:
+                # Alignment: MSE(mu, e_text) + lambda*MSE(recon)
+                # Drop KL divergence
+                recon_mse = torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"]))
+                align_mse = torch.mean(torch.square(outputs["mu"] - h_text))
+                
+                loss = 5.0 * align_mse + 1.0 * recon_mse # alpha=5, lambda=1
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                # Mock metrics for logging
+                metrics = {
+                    "loss": loss,
+                    "rec_loss": recon_mse * outputs["x_hat"].shape[-1],
+                    "kl_loss": torch.tensor(0.0),
+                    "align_loss": align_mse
+                }
+
+            if phase == 1:
+                optimizer.zero_grad()
+                metrics["loss"].backward()
+                optimizer.step()
             
-            optimizer.zero_grad()
-            metrics["loss"].backward()
-            optimizer.step()
-            
-            epoch_losses["loss"].append(metrics["loss"].item())
-            epoch_losses["recon"].append(metrics["rec_loss"].item())
+            epoch_losses["total"].append(metrics["loss"].item())
+            epoch_losses["rec"].append(metrics["rec_loss"].item())
             epoch_losses["kl"].append(metrics["kl_loss"].item())
             epoch_losses["align"].append(metrics["align_loss"].item())
-            
-        avg_recon = sum(epoch_losses["recon"]) / len(epoch_losses["recon"])
-        logger.info(f"Epoch {epoch} complete. Train MSE: {avg_recon:.4f}")
+        
+        avg_rec = sum(epoch_losses["rec"]) / len(epoch_losses["rec"])
+        avg_align = sum(epoch_losses["align"]) / len(epoch_losses["align"])
+        logger.info(f"Epoch {epoch} complete | Phase {phase} | Train MSE: {avg_rec:.4f} | Align MSE: {avg_align:.4f}")
         scheduler.step()
     
     # 5. Final Evaluation
@@ -276,6 +295,7 @@ if __name__ == "__main__":
     model.eval()
     test_metrics = {
         "recon": [],
+        "align": [],
         "corr": [],
         "corr_top10": [],
         "corr_sample": [],
@@ -301,6 +321,9 @@ if __name__ == "__main__":
                 h_text=h_text
             )
             
+            # Alignment MSE
+            align_mse = torch.mean(torch.square(outputs["mu"] - h_text)).item()
+            test_metrics["align"].append(align_mse)
             test_metrics["recon"].append(metrics["rec_loss"].item())
             
             # Correlation check
@@ -354,6 +377,7 @@ if __name__ == "__main__":
                 logger.info(f"  First Eval Batch Avg Context length: {np.mean([len(t.split()) for t in texts]):.1f} words")
 
     final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
+    final_align = sum(test_metrics["align"]) / len(test_metrics["align"])
     final_corr = sum(test_metrics["corr"]) / len(test_metrics["corr"])
     final_corr_top = sum(test_metrics["corr_top10"]) / len(test_metrics["corr_top10"])
     final_corr_sample = sum(test_metrics["corr_sample"]) / len(test_metrics["corr_sample"])
@@ -361,7 +385,8 @@ if __name__ == "__main__":
     
     logger.info("---------------------------------------")
     logger.info("FINAL TEST RESULTS:")
-    logger.info(f"  MSE:              {final_recon:.4f}")
+    logger.info(f"  MSE (Recon):      {final_recon:.4f}")
+    logger.info(f"  MSE (Align):      {final_align:.4f}")
     logger.info(f"  Global Corr:      {final_corr:.4f}")
     logger.info(f"  Top 10 Comp Corr: {final_corr_top:.4f}")
     logger.info(f"  Mean Sample Corr: {final_corr_sample:.4f}")

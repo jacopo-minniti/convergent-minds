@@ -18,37 +18,30 @@ class VaeBrainAdapter(nn.Module):
     Encoder: [4 x 1000] + PE -> Flatten(4000) -> 2048 -> 1024 ->mu/logvar(768)
     Decoder: 768 -> 1024 -> 2048 -> 4000
     """
-    def __init__(
-        self, 
-        input_dim: int = 1000, 
-        n_frames: int = 4, 
-        latent_dim: int = 768,
-        dropout: float = 0.2
-    ):
+    def __init__(self, input_dim=1000, n_frames=4, latent_dim=768):
         super().__init__()
         self.input_dim = input_dim
         self.n_frames = n_frames
         self.flattened_dim = input_dim * n_frames
         self.latent_dim = latent_dim
-        
-        # Positional Encoding (initialized small)
-        self.positional_params = nn.Parameter(torch.randn(n_frames, input_dim) * 0.01)
-        
-        # Encoder
-        self.encoder_mlp = nn.Sequential(
+
+        # Trainable Position Embeddings for the sequence of frames
+        self.positional_params = nn.Parameter(torch.randn(1, n_frames, input_dim) * 0.01)
+
+        # Encoder: 1000*4 -> 2048 -> 1024 -> (768 mu, 768 logvar)
+        self.encoder_base = nn.Sequential(
             nn.Linear(self.flattened_dim, 2048),
             nn.LayerNorm(2048),
             nn.GELU(),
-            nn.Dropout(dropout),
             nn.Linear(2048, 1024),
             nn.LayerNorm(1024),
             nn.GELU()
         )
-        
         self.fc_mu = nn.Linear(1024, latent_dim)
         self.fc_logvar = nn.Linear(1024, latent_dim)
-        
-        self.decoder_mlp = nn.Sequential(
+
+        # Decoder: 768 -> 1024 -> 2048 -> 1000*4
+        self.decoder = nn.Sequential(
             nn.Linear(latent_dim, 1024),
             nn.LayerNorm(1024),
             nn.GELU(),
@@ -58,37 +51,27 @@ class VaeBrainAdapter(nn.Module):
             nn.Linear(2048, self.flattened_dim)
         )
 
-    def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            x: (batch, n_frames, input_dim)
-        """
-        # Add Positional Encoding
-        x = x + self.positional_params.unsqueeze(0)
-        # Flatten
-        x = x.view(x.shape[0], -1) # (batch, 4000)
-        
-        h = self.encoder_mlp(x)
-        return self.fc_mu(h), self.fc_logvar(h)
+    def encode(self, x):
+        # x: (B, 4, 1000)
+        x = x + self.positional_params
+        x = x.view(x.shape[0], -1) # (B, 4000)
+        hidden = self.encoder_base(x)
+        return self.fc_mu(hidden), self.fc_logvar(hidden)
 
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        return self.decoder_mlp(z)
-
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        x_hat = self.decode(z)
-        
+        x_hat = self.decoder(z)
         return {
+            "x_hat": x_hat,
             "mu": mu,
             "logvar": logvar,
             "z": z,
-            "x_hat": x_hat,
             "x_orig": x.view(x.shape[0], -1)
         }
 
