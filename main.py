@@ -44,10 +44,14 @@ def run_eval(model, loader, embedder, device):
             all_targets.append(h_text)
             all_texts.extend(target)
             
-    # LLM Retrieval Dashboard
+    # LLM Retrieval Dashboard (Memory-Efficient MatMul)
     full_mus = torch.cat(all_mus, dim=0)
     full_targets = torch.cat(all_targets, dim=0)
-    scores = F.cosine_similarity(full_mus.unsqueeze(1), full_targets.unsqueeze(0), dim=-1)
+    
+    # Normalize for cosine similarity via dot product
+    mus_norm = F.normalize(full_mus, p=2, dim=-1)
+    targets_norm = F.normalize(full_targets, p=2, dim=-1)
+    scores = torch.matmul(mus_norm, targets_norm.t()) # (N, N)
     
     for i in range(len(all_texts)):
         best_idx = torch.argmax(scores[i]).item()
@@ -80,60 +84,79 @@ def main():
     model = BrainLanguageAdapter(use_vae=args.use_vae).to(device)
     optimizer = AdamW(model.parameters(), lr=1e-4)
     
-    # 3. Training logic
-    phase_epochs = [int(e) for e in args.epochs.split(",")]
-    total_epochs = sum(phase_epochs)
-    
-    for epoch in range(1, total_epochs + 1):
-        model.train()
-        epoch_losses = []
-        # Phase logic: 
-        # If '10,10' -> Epoch 1-10 is Phase 1 (VAE Recon if use_vae), 11-20 is Phase 2 (Align)
-        if len(phase_epochs) > 1:
-            phase = 1 if epoch <= phase_epochs[0] else 2
-        else:
-            phase = 2 # Default to alignment if single epoch count provided
-            
-        pbar = tqdm(train_loader, desc=f"Ep {epoch:2d} | Ph {phase}")
-        for batch in pbar:
-            x, ctx, target = batch["bold"].to(device), batch["context"], batch["target"]
-            h_text = embedder.embed_with_context(ctx, target).to(device)
-            
-            outputs = model(x)
-            loss_dict = {}
-            
-            if args.use_vae and phase == 1:
-                # Reconstruction only
-                res = vae_reconstruction_loss(outputs["x_hat"], outputs["x_orig"], outputs["mu"], outputs["logvar"])
-                loss = res["loss"]
-                loss_dict = {"loss": loss.item(), "rec": res["rec_loss"].item()}
+    # 3. Model Saving Path (Move up to check cache)
+    save_dir = os.path.join(os.environ.get("CONVMINDS_HOME", "."), "models", "huth_alignment")
+    os.makedirs(save_dir, exist_ok=True)
+    mode_str = "vae" if args.use_vae else "mlp"
+    save_path = os.path.join(save_dir, f"huth_{mode_str}_{args.loss_type}.pt")
+
+    # 4. Check for cached model
+    if os.path.exists(save_path):
+        logger.info(f"Found cached model at {save_path}. Skipping training.")
+        model.load_state_dict(torch.load(save_path, map_location=device))
+        skip_training = True
+    else:
+        skip_training = False
+
+    # 5. Training logic
+    if not skip_training:
+        phase_epochs = [int(e) for e in args.epochs.split(",")]
+        total_epochs = sum(phase_epochs)
+        
+        for epoch in range(1, total_epochs + 1):
+            model.train()
+            epoch_losses = []
+            # Phase logic: 
+            # If '10,10' -> Epoch 1-10 is Phase 1 (VAE Recon if use_vae), 11-20 is Phase 2 (Align)
+            if len(phase_epochs) > 1:
+                phase = 1 if epoch <= phase_epochs[0] else 2
             else:
-                # Alignment (+ Recon choice)
-                if args.loss_type == "info_nce":
-                    align_loss = info_nce_loss(outputs["h_llm"], h_text)
-                else:
-                    align_loss = F.mse_loss(outputs["h_llm"], h_text)
+                phase = 2 # Default to alignment if single epoch count provided
                 
-                loss = align_loss
-                if args.use_vae:
+            pbar = tqdm(train_loader, desc=f"Ep {epoch:2d} | Ph {phase}")
+            for batch in pbar:
+                x, ctx, target = batch["bold"].to(device), batch["context"], batch["target"]
+                h_text = embedder.embed_with_context(ctx, target).to(device)
+                
+                outputs = model(x)
+                loss_dict = {}
+                
+                if args.use_vae and phase == 1:
+                    # Reconstruction only
                     res = vae_reconstruction_loss(outputs["x_hat"], outputs["x_orig"], outputs["mu"], outputs["logvar"])
-                    loss = loss + res["loss"]
-                    loss_dict["rec"] = res["rec_loss"].item()
-                
-                loss_dict["align"] = align_loss.item()
-                loss_dict["loss"] = loss.item()
+                    loss = res["loss"]
+                    loss_dict = {"loss": loss.item(), "rec": res["rec_loss"].item()}
+                else:
+                    # Alignment (+ Recon choice)
+                    if args.loss_type == "info_nce":
+                        align_loss = info_nce_loss(outputs["h_llm"], h_text)
+                    else:
+                        align_loss = F.mse_loss(outputs["h_llm"], h_text)
+                    
+                    loss = align_loss
+                    if args.use_vae:
+                        res = vae_reconstruction_loss(outputs["x_hat"], outputs["x_orig"], outputs["mu"], outputs["logvar"])
+                        loss = loss + res["loss"]
+                        loss_dict["rec"] = res["rec_loss"].item()
+                    
+                    loss_dict["align"] = align_loss.item()
+                    loss_dict["loss"] = loss.item()
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            epoch_losses.append(loss.item())
-            pbar.set_postfix(loss_dict)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                epoch_losses.append(loss.item())
+                pbar.set_postfix(loss_dict)
 
-        # End of epoch summary
-        avg_loss = np.mean(epoch_losses)
-        logger.info(f"Epoch {epoch:2d}/{total_epochs} completed | Phase {phase} | Avg Loss: {avg_loss:.4f}")
+            # End of epoch summary
+            avg_loss = np.mean(epoch_losses)
+            logger.info(f"Epoch {epoch:2d}/{total_epochs} completed | Phase {phase} | Avg Loss: {avg_loss:.4f}")
 
-    # 4. Final Evaluation
+        # Final Save
+        torch.save(model.state_dict(), save_path)
+        logger.info(f"\nModel saved to: {save_path}")
+
+    # 6. Final Evaluation
     logger.info("\n" + "="*40)
     logger.info("FINAL PERFORMANCE REPORT")
     logger.info("="*40)
@@ -142,7 +165,7 @@ def main():
         fmt = f"{v*100:.2f}%" if k in ["top10_acc", "bleu", "rouge1", "rougeL", "meteor"] else f"{v:.4f}"
         logger.info(f"{k.upper():<12}: {fmt}")
     
-    # 5. Visual Samples
+    # 6. Visual Samples
     logger.info("\n" + "="*40)
     logger.info("DECODING SAMPLES")
     logger.info("="*40)
@@ -165,14 +188,6 @@ def main():
             # top brain tokens
             tok_str = ", ".join([f"{t} ({p*100:.1f}%)" for t, p in top_tokens[i]])
             logger.info(f"  PREDICTED: {tok_str}")
-
-    # 6. Save Model
-    save_dir = os.path.join(os.environ.get("CONVMINDS_HOME", "."), "models", "huth_alignment")
-    os.makedirs(save_dir, exist_ok=True)
-    mode_str = "vae" if args.use_vae else "mlp"
-    save_path = os.path.join(save_dir, f"huth_{mode_str}_{args.loss_type}.pt")
-    torch.save(model.state_dict(), save_path)
-    logger.info(f"\nModel saved to: {save_path}")
 
 if __name__ == "__main__":
     main()
