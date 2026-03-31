@@ -102,28 +102,26 @@ class HuthBenchmark(BaseBenchmark):
 
         # 2. Get Metadata (json files are already there but symlinks)
         respdict_path = self.huth_dir / "derivatives/respdict.json"
-        if not respdict_path.exists() or respdict_path.stat().st_size < 1000: # Symlinks are small
+        if not respdict_path.exists() or respdict_path.stat().st_size < 1000:
             logger.info("Materializing Huth metadata (respdict.json)...")
             self._run_datalad(["get", "derivatives/respdict.json"], self.huth_dir)
 
         # 3. Get Stimuli (TextGrids)
         textgrids_dir = self.huth_dir / "derivatives/TextGrids"
-        # Check if dir is empty or contains only broken symlinks
         if not textgrids_dir.exists() or not any(f.is_file() and f.stat().st_size > 100 for f in textgrids_dir.glob("*.TextGrid")):
             logger.info("Materializing Huth stimuli (TextGrids)...")
             self._run_datalad(["get", "derivatives/TextGrids"], self.huth_dir)
 
         # 4. Get BOLD data for the specific subject
-        subj_data_dir = self.huth_dir / "derivatives/preprocessed_data" / self.subject_id
-        if not subj_data_dir.exists() or not any(f.is_file() and f.stat().st_size > 1e6 for f in subj_data_dir.glob("*.hf5")):
+        subj_dir = self.huth_dir / "derivatives" / "preprocessed_data" / self.subject_id
+        
+        # Check if files are present (size check to detect un-materialized links)
+        files_present = subj_dir.exists() and any(f.is_file() and f.stat().st_size > 1e6 for f in subj_dir.glob("*.hf5"))
+        
+        if not files_present:
             logger.info(f"Materializing Huth BOLD data for subject: {self.subject_id}...")
             rel_path = f"derivatives/preprocessed_data/{self.subject_id}"
-            try:
-                self._run_datalad(["get", rel_path], self.huth_dir)
-            except Exception:
-                # Try sub-UTSXX if it fails
-                logger.info(f"Retrying with sub- prefix for {self.subject_id}...")
-                self._run_datalad(["get", f"derivatives/preprocessed_data/sub-{self.subject_id}"], self.huth_dir)
+            self._run_datalad(["get", rel_path], self.huth_dir)
              
         logger.info("Huth data environment ready.")
 
@@ -151,20 +149,20 @@ class HuthBenchmark(BaseBenchmark):
         """
         derivatives_dir = self.huth_dir / "derivatives"
         stim_dir = derivatives_dir / "TextGrids"
-        
-        # 1. Resolve subject directory (could be UTS01 or sub-UTS01)
         subj_dir = derivatives_dir / "preprocessed_data" / self.subject_id
-        if not subj_dir.exists():
-            subj_dir = derivatives_dir / "preprocessed_data" / f"sub-{self.subject_id}"
-            
-        if not subj_dir.exists():
-             raise FileNotFoundError(f"Subject folder not found: {self.subject_id}. Did datalad get fail?")
         
+        if not subj_dir.exists():
+             raise FileNotFoundError(f"Subject folder not found: {subj_dir}")
+
         respdict_path = derivatives_dir / "respdict.json"
+        
+        if not respdict_path.exists():
+             raise FileNotFoundError(f"Huth metadata not found: {respdict_path}")
+             
         with open(respdict_path, "r") as f:
             respdict = json.load(f)
             
-        # 2. Discover stories from the HDF5 files in the subject folder
+        # Discover stories from the HDF5 files in the subject folder
         hf5_files = list(subj_dir.glob("*.hf5"))
         if not hf5_files:
              logger.warning(f"No BOLD HDF5 files found for subject {self.subject_id} in {subj_dir}")
@@ -172,40 +170,39 @@ class HuthBenchmark(BaseBenchmark):
         records = []
         rows = []
         
+        # Naming normalization to handle hyphen discrepancies
+        def normalize(s: str) -> str:
+            return s.replace("-", "").replace("_", "").lower()
+            
+        # Map TextGrids if not cached
+        if not hasattr(self, "_tg_mapping"):
+             self._tg_mapping = {normalize(p.stem): p for p in stim_dir.glob("*.TextGrid")}
+        
+        # Story TR count from respdict (also normalized)
+        if not hasattr(self, "_respdict_norm"):
+             self._respdict_norm = {normalize(k): v for k, v in respdict.items()}
+
         for hf_path in hf5_files:
             story = hf_path.stem
-            # Naming normalization to handle hyphen discrepancies (e.g. adventures-in-saying-yes vs adventuresinsayingyes)
-            def normalize(s: str) -> str:
-                return s.replace("-", "").replace("_", "").lower()
-            
             norm_story = normalize(story)
             
-            # Map TextGrids if not cached
-            if not hasattr(self, "_tg_mapping"):
-                 self._tg_mapping = {normalize(p.stem): p for p in stim_dir.glob("*.TextGrid")}
-            
             tg_path = self._tg_mapping.get(norm_story)
-            
             if not tg_path:
-                logger.warning(f"TextGrid not found for story {story} (normalized: {norm_story})")
+                logger.debug(f"TextGrid not found for story {story} (normalized: {norm_story})")
                 continue
                 
-            # Story TR count from respdict (also normalized)
-            if not hasattr(self, "_respdict_norm"):
-                 self._respdict_norm = {normalize(k): v for k, v in respdict.items()}
-            
             if norm_story not in self._respdict_norm:
-                  logger.warning(f"Story {story} not found in respdict.json. Guessing length from HDF5.")
-                  with h5py.File(hf_path, "r") as f:
-                       n_trs = f["data"].shape[0]
+                logger.warning(f"Story {story} not found in respdict.json. Guessing length from HDF5.")
+                with h5py.File(hf_path, "r") as f:
+                    n_trs = f["data"].shape[0]
             else:
-                  n_trs = self._respdict_norm[norm_story]
+                n_trs = self._respdict_norm[norm_story]
                  
             tr_times = np.arange(n_trs) * 2.0
             
             # Skip if broken symlink (fetch failed)
             if not tg_path.exists():
-                 logger.warning(f"Stimulus file not found (or broken symlink): {tg_path}")
+                 logger.warning(f"Stimulus file not found: {tg_path}")
                  continue
 
             with open(tg_path, "r") as f:
@@ -238,9 +235,11 @@ class HuthBenchmark(BaseBenchmark):
                 "story": story,
                 "metadata": rec.metadata
             })
+            
         # Cache the rows for faster reload
-        self.processed_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(rows).to_pickle(self.processed_path)
+        if rows:
+            self.processed_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(rows).to_pickle(self.processed_path)
         
         return StimulusSet(records=records)
 

@@ -98,8 +98,9 @@ class HuthRecordingSource(HumanRecordingSource):
         # 2. Resolve Path (benchmark.huth_dir / derivatives/preprocessed_data / UTS01)
         derivatives_path = self.ds_root / "derivatives"
         subject_dir = derivatives_path / "preprocessed_data" / subject_id
+        
         if not subject_dir.exists():
-            subject_dir = derivatives_path / "preprocessed_data" / f"sub-{subject_id}"
+             raise FileNotFoundError(f"Subject folder not found: {subject_dir}")
             
         stories = [s.stimulus_id for s in benchmark.stimuli] 
         unique_stories = sorted(list(set(stories)))
