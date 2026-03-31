@@ -221,17 +221,17 @@ if __name__ == "__main__":
     # 7. TRAINING LOOP (Phases 1 & 2)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     criterion = TripartiteVAELoss()
-    scheduler = CosineAnnealingLR(optimizer, T_max=20)
+    scheduler = CosineAnnealingLR(optimizer, T_max=15)
     
-    total_epochs = 20
-    logger.info(f"Starting Training Loop ({total_epochs} epochs)...")
+    total_epochs = 15
+    logger.info(f"Starting 2-Phase Training ({total_epochs} epochs)...")
     
     for epoch in range(1, total_epochs + 1):
         model.train()
         epoch_losses = {"total": [], "rec": [], "kl": [], "align": []}
         
-        # Phase 1: Manifold Warm-up (Epochs 1-5)
-        # Phase 2: Embedding Alignment (Epochs 6-20)
+        # Phase 1: Manifold Reconstruction (Epochs 1-5)
+        # Phase 2: Embedding Alignment Task (Epochs 6-15)
         phase = 1 if epoch <= 5 else 2
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch} (Phase {phase})")
@@ -245,10 +245,12 @@ if __name__ == "__main__":
             outputs = model(x)
             
             if phase == 1:
-                # Standard ELBO: MSE + beta*KL
+                # Phase 1: Pure VAE (Reconstruction + KL)
+                # Keep KL weight small to prioritize manifold quality
                 criterion.rec_weight = 1.0
-                criterion.kl_weight = 0.01
+                criterion.kl_weight = 0.005 # Beta-VAE
                 criterion.align_weight = 0.0
+                
                 metrics = criterion(
                     recon_x=outputs["x_hat"],
                     x=outputs["x_orig"],
@@ -258,20 +260,19 @@ if __name__ == "__main__":
                     h_text=h_text
                 )
             else:
-                # Alignment: MSE(mu, e_text) + lambda*MSE(recon)
-                # Drop KL divergence
-                recon_mse = torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"]))
+                # Phase 2: Focused Alignment (No Recon, No KL)
+                # Task: Map Brain latent space (mu) directly to LLM space (h_text)
                 align_mse = torch.mean(torch.square(outputs["mu"] - h_text))
                 
-                loss = 5.0 * align_mse + 1.0 * recon_mse # alpha=5, lambda=1
+                loss = align_mse
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 
-                # Mock metrics for logging
+                # Metrics for logging
                 metrics = {
                     "loss": loss,
-                    "rec_loss": recon_mse * outputs["x_hat"].shape[-1],
+                    "rec_loss": torch.tensor(0.0),
                     "kl_loss": torch.tensor(0.0),
                     "align_loss": align_mse
                 }
@@ -313,24 +314,13 @@ if __name__ == "__main__":
             h_text = embedder.embed(texts).to(device)
             
             outputs = model(x)
-            # Final eval uses Phase 2 logic (Alignment focused)
-            criterion.rec_weight = 1.0
-            criterion.kl_weight = 0.0 
-            criterion.align_weight = 0.0 # We calculate align_mse manually below for mu
-            
-            metrics = criterion(
-                recon_x=outputs["x_hat"],
-                x=outputs["x_orig"],
-                mu=outputs["mu"],
-                logvar=outputs["logvar"],
-                z=outputs["z"],
-                h_text=h_text
-            )
-            
-            # Alignment MSE
+            # Evaluation focuses on Brain-to-Text alignment logic
+            # Use मु (mu) vs h_text as the primary test
             align_mse = torch.mean(torch.square(outputs["mu"] - h_text)).item()
+            rec_mse = torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"])).item()
+            
             test_metrics["align"].append(align_mse)
-            test_metrics["recon"].append(metrics["rec_loss"].item())
+            test_metrics["recon"].append(rec_mse)
             
             # Correlation check
             flat_hat = outputs["x_hat"].detach().cpu().numpy() # (B, 4000)
@@ -356,8 +346,8 @@ if __name__ == "__main__":
             test_metrics["corr_sample"].append(np.mean(sample_corrs) if sample_corrs else 0.0)
             
             # Variance explained: 1 - MSE / Var(Orig)
-            mse = metrics["rec_loss"].item()
-            var_orig = flat_orig.var() * 4000 if flat_orig.size > 0 else 1.0
+            mse = rec_mse
+            var_orig = flat_orig.var() if flat_orig.size > 0 else 1.0
             test_metrics["var_exp"].append(1.0 - (mse / var_orig))
             
             if i == 0:
