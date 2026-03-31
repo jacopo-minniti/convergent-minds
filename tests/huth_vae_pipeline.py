@@ -268,7 +268,10 @@ if __name__ == "__main__":
     model.eval()
     test_metrics = {
         "recon": [],
-        "corr": []
+        "corr": [],
+        "corr_top10": [],
+        "corr_sample": [],
+        "var_exp": []
     }
     
     # Track a few samples
@@ -292,11 +295,33 @@ if __name__ == "__main__":
             
             test_metrics["recon"].append(metrics["rec_loss"].item())
             
-            # Correlation check (batch-wide)
-            flat_hat = outputs["x_hat"].detach().cpu().numpy().flatten()
-            flat_orig = outputs["x_orig"].detach().cpu().numpy().flatten()
-            corr = np.corrcoef(flat_hat, flat_orig)[0, 1]
+            # Correlation check
+            flat_hat = outputs["x_hat"].detach().cpu().numpy() # (B, 4000)
+            flat_orig = outputs["x_orig"].detach().cpu().numpy() # (B, 4000)
+            
+            # Global Correlation
+            corr = np.corrcoef(flat_hat.flatten(), flat_orig.flatten())[0, 1]
             test_metrics["corr"].append(corr)
+            
+            # Correlation on the top few PCA components (first 10 of each frame)
+            # shapes are (B, 4, 1000) reshaped to (B, 4000)
+            top10_hat = flat_hat.reshape(-1, 4, 1000)[:, :, :10].flatten()
+            top10_orig = flat_orig.reshape(-1, 4, 1000)[:, :, :10].flatten()
+            test_metrics["corr_top10"].append(np.corrcoef(top10_hat, top10_orig)[0, 1])
+            
+            # Per-sample correlation (average of correlations for each sample in batch)
+            # flat_hat: (B, 4000)
+            sample_corrs = []
+            for b in range(flat_hat.shape[0]):
+                c = np.corrcoef(flat_hat[b], flat_orig[b])[0, 1]
+                if not np.isnan(c):
+                    sample_corrs.append(c)
+            test_metrics["corr_sample"].append(np.mean(sample_corrs) if sample_corrs else 0.0)
+            
+            # Variance explained: 1 - MSE / Var(Orig)
+            mse = metrics["rec_loss"].item()
+            var_orig = flat_orig.var() * 4000 if flat_orig.size > 0 else 1.0
+            test_metrics["var_exp"].append(1.0 - (mse / var_orig))
             
             if i == 0:
                 logger.debug(f"  Eval Batch Recon Stats: Mean={flat_hat.mean():.4f}, Std={flat_hat.std():.4f}")
@@ -313,10 +338,17 @@ if __name__ == "__main__":
 
     final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
     final_corr = sum(test_metrics["corr"]) / len(test_metrics["corr"])
+    final_corr_top = sum(test_metrics["corr_top10"]) / len(test_metrics["corr_top10"])
+    final_corr_sample = sum(test_metrics["corr_sample"]) / len(test_metrics["corr_sample"])
+    final_ve = sum(test_metrics["var_exp"]) / len(test_metrics["var_exp"])
     
     logger.info("---------------------------------------")
-    logger.info(f"FINAL TEST MSE:  {final_recon:.4f}")
-    logger.info(f"FINAL TEST CORR: {final_corr:.4f}")
+    logger.info("FINAL TEST RESULTS:")
+    logger.info(f"  MSE:              {final_recon:.4f}")
+    logger.info(f"  Global Corr:      {final_corr:.4f}")
+    logger.info(f"  Top 10 Comp Corr: {final_corr_top:.4f}")
+    logger.info(f"  Mean Sample Corr: {final_corr_sample:.4f}")
+    logger.info(f"  Var Explained:    {final_ve*100:.2f}%")
     logger.info("---------------------------------------")
     
     logger.info("\nSAMPLE TEST INSTANCES:")
