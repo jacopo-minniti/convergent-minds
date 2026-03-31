@@ -93,3 +93,19 @@ class TripartiteVAELoss(nn.Module):
             "kl_loss": kl_loss,
             "align_loss": align_loss
         }
+
+def info_nce_loss(z: torch.Tensor, h: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+    """Standalone InfoNCE contrastive loss."""
+    # Symmetrize so that we align both directions (brain -> text and text -> brain)
+    z = F.normalize(z, p=2, dim=-1)
+    h = F.normalize(h, p=2, dim=-1)
+    logits = torch.matmul(z, h.t()) / temperature
+    labels = torch.arange(z.shape[0], device=z.device)
+    return (F.cross_entropy(logits, labels) + F.cross_entropy(logits.t(), labels)) / 2
+
+def vae_reconstruction_loss(recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, kl_weight: float = 0.005) -> dict[str, torch.Tensor]:
+    """Basic VAE reconstruction and KL loss."""
+    rec_loss = F.mse_loss(recon_x, x)
+    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=-1).mean()
+    total_loss = rec_loss + kl_weight * kl_loss
+    return {"loss": total_loss, "rec_loss": rec_loss, "kl_loss": kl_loss}

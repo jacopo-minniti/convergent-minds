@@ -1,494 +1,172 @@
+import os
+import sys
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import numpy as np
-import pandas as pd
 from tqdm import tqdm
 import logging
-import sys
-import convminds as cm
-from convminds.models.vae_adapter import VaeBrainAdapter, info_nce_loss
-from convminds.nn.losses import TripartiteVAELoss
-from convminds.nn.metrics import calculate_nlp_metrics, identification_accuracy
-from convminds.transforms.pca import VoxelPCA
-from convminds.transforms.timeseries import TrimTRs
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import argparse
 
-# Configure logging (using INFO for clean dashboard)
+# convminds imports
+from convminds.data.benchmarks.huth_alignment import HuthAlignmentDataset
+from convminds.nn.encoders.language import GPT2Embedder
+from convminds.models.brain_adapters import BrainLanguageAdapter
+from convminds.nn.losses import info_nce_loss, vae_reconstruction_loss
+from convminds.nn.metrics import calculate_nlp_metrics, identification_accuracy
+
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
-class GPT2Embedder:
-    def __init__(self, device="cpu"):
-        self.device = device
-        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-        # Use LMHeadModel to enable actual word prediction
-        self.model = GPT2LMHeadModel.from_pretrained("gpt2").to(self.device)
-        self.model.eval()
-        self.wte = self.model.transformer.wte
-
-    @torch.no_grad()
-    def embed_with_context(self, context_texts, target_texts):
-        """
-        Embeds the target_texts given the context_texts. 
-        Returns the mean of the hidden states for the tokens in target_text.
-        """
-        all_embeddings = []
-        for ctx, target in zip(context_texts, target_texts):
-            full_text = (ctx.strip() + " " + target.strip()).strip()
-            if not full_text:
-                all_embeddings.append(torch.zeros(1, 768).to(self.device))
-                continue
-                
-            inputs = self.tokenizer(full_text, return_tensors="pt").to(self.device)
-            outputs = self.model.transformer(**inputs)
-            hidden_states = outputs.last_hidden_state
-            
-            target_ids = self.tokenizer(target.strip(), add_special_tokens=False).input_ids
-            num_target_tokens = len(target_ids)
-            
-            if num_target_tokens > 0:
-                target_hidden = hidden_states[:, -num_target_tokens:, :]
-                mean_target = target_hidden.mean(dim=1)
-            else:
-                mean_target = hidden_states[:, -1:, :]
-                
-            all_embeddings.append(mean_target.squeeze(1))
-            
-        return torch.cat(all_embeddings, dim=0)
-
-    @torch.no_grad()
-    def predict_tokens(self, latent_vecs, top_k=5):
-        """
-        Passes the brain latent through the GPT2 LM Head to get word predictions.
-        """
-        # (B, 768) -> (B, 50257) vocab logits
-        logits = self.model.lm_head(latent_vecs)
-        probs = torch.softmax(logits, dim=-1)
-        
-        top_probs, top_indices = torch.topk(probs, k=top_k, dim=-1)
-        
-        results = []
-        for b in range(latent_vecs.shape[0]):
-            toks = [self.tokenizer.decode([idx]).strip() for idx in top_indices[b]]
-            scores = top_probs[b].tolist()
-            results.append(list(zip(toks, scores)))
-        return results
-
-class HuthVaeDataset(Dataset):
-    """
-    Standardized multi-subject Huth dataset for VAE-InfoNCE training.
+def run_eval(model, loader, embedder, device):
+    model.eval()
+    stats = {"mse_align": [], "cosine": [], "top10_acc": [], "bleu": [], "rouge1": [], "rougeL": [], "wer": [], "meteor": []}
     
-    Implements:
-    - Subject-specific PCA (1000)
-    - Hemodynamic shift windowing: BOLD[t+1:t+5] (4 frames)
-    - Target windowing: Stimulus[t-2:t+1] (3 frames of context)
-    """
-    def __init__(self, subject_ids: list[str], trim: int = 5, n_components: int = 1000, device="cpu"):
-        self.subject_ids = subject_ids
-        self.trim = trim
-        self.device = device
-        self.n_components = n_components
-        
-        self.all_samples = []
-        self.subject_pcas = {}
-        
-        # We'll populate these from the benchmarks
-        # data[subj][story] = (T, V)
-        self.bold_data = {}
-        # metadata[subj][story] = {tr_times: [], word_intervals: []}
-        self.story_metadata = {}
-        
-        self._load_and_preprocess()
+    all_mus, all_targets, all_texts = [], [], []
+    
+    with torch.no_grad():
+        for batch in loader:
+            x, context, target = batch["bold"].to(device), batch["context"], batch["target"]
+            h_text = embedder.embed_with_context(context, target).to(device)
+            outputs = model(x)
+            
+            # Use h_llm for alignment stats (this is mu in VAE mode)
+            h_pred = outputs["h_llm"]
+            
+            stats["mse_align"].append(F.mse_loss(h_pred, h_text).item())
+            stats["cosine"].append(F.cosine_similarity(h_pred, h_text, dim=-1).mean().item())
+            stats["top10_acc"].append(identification_accuracy(h_pred, h_text, top_k=10))
+            
+            all_mus.append(h_pred)
+            all_targets.append(h_text)
+            all_texts.extend(target)
+            
+    # LLM Retrieval Dashboard
+    full_mus = torch.cat(all_mus, dim=0)
+    full_targets = torch.cat(all_targets, dim=0)
+    scores = F.cosine_similarity(full_mus.unsqueeze(1), full_targets.unsqueeze(0), dim=-1)
+    
+    for i in range(len(all_texts)):
+        best_idx = torch.argmax(scores[i]).item()
+        nlp = calculate_nlp_metrics(all_texts[best_idx], all_texts[i])
+        for k, v in nlp.items():
+            stats[k].append(v)
+            
+    return {k: np.mean(v) for k, v in stats.items()}
 
-    def _load_and_preprocess(self):
-        logger.info(f"Loading and preprocessing Huth data for subjects: {self.subject_ids}")
-        for subj in self.subject_ids:
-            logger.info(f"Processing subject {subj}...")
-            benchmark = cm.benchmarks.HuthBenchmark(subject=subj)
-            
-            # 1. Load Story-Units
-            # huth_benchmark.human_recording_source returns TOKEN_LEVEL (one story per item)
-            recording_data = benchmark.human_recording_source.load_recordings(benchmark, selector={"subject": subj})
-            stories = recording_data.values # List of (T, V)
-            story_names = recording_data.stimulus_ids
-            rois = recording_data.metadata.get("rois", {})
-            
-            # 2. Fit Subject-Specific PCA
-            # We stack all stories for the subject to fit PCA on global variance
-            all_subj_bold = np.vstack(stories)
-            
-            # Setup specific cache path for this subject
-            cache_dir = cm.cache.convminds_home() / "cache" / "pca"
-            cache_path = cache_dir / f"huth_{subj}_pca_{self.n_components}.joblib"
-            
-            pca = VoxelPCA(n_components=self.n_components, cache_path=cache_path)
-            
-            # Create a brain tensor for fitting PCA
-            # signal: (B=1, T, Voxels)
-            brain_for_pca = cm.data.primitives.BrainTensor(
-                torch.from_numpy(all_subj_bold).unsqueeze(0).float(), 
-                torch.zeros((all_subj_bold.shape[1], 3)), 
-                rois
-            )
-            
-            logger.info(f"Solving PCA for {subj} (fitting on {all_subj_bold.shape[0]} TRs)...")
-            pca.fit(brain_for_pca)
-            self.subject_pcas[subj] = pca
-            
-            if pca._pca is not None:
-                exp_var = np.sum(pca._pca.explained_variance_ratio_)
-                logger.info(f"Subject {subj} PCA Total Explained Variance: {exp_var:.4f}")
-                logger.info(f"Top 5 Ratio: {pca._pca.explained_variance_ratio_[:5]}")
-            
-            # 3. Transform Stories using learned PCA
-            self.bold_data[subj] = {}
-            for i, story_name in enumerate(story_names):
-                # Apply PCA and z-score or similar
-                # Huth recordings are often already z-scored, but we'll apply PCA projection
-                # Wrap (T, V) into BrainTensor for transform
-                bt = cm.data.primitives.BrainTensor(torch.from_numpy(stories[i]).unsqueeze(0).float(), torch.zeros(stories[i].shape[1], 3), rois)
-                projected = pca(bt).signal.squeeze(0).numpy() # (T, 1000)
-                
-                # Z-score normalization per run
-                mean = projected.mean(axis=0, keepdims=True)
-                std = projected.std(axis=0, keepdims=True) + 1e-8
-                projected = (projected - mean) / std
-                
-                self.bold_data[subj][story_name] = projected
-                
-            # 4. GATHER STIMULUS ALIGNMENT
-            # Use metadata to align brain with words
-            for record in benchmark.stimuli:
-                story_name = record.stimulus_id
-                if story_name not in self.bold_data[subj]:
-                    continue
-                    
-                self.story_metadata[story_name] = record.metadata
-                actual_trs = self.bold_data[subj][story_name].shape[0]
-                
-                # ALIGNMENT STRUCTURE:
-                # Target TR: x
-                # Context TRs: [x-3, x-2, x-1] (Prompt)
-                # Target Text: Words in TR x
-                # Brain Input: BOLD in [x+1, x+2, x+3, x+4]
-                
-                # Limits: 
-                # Start: x-3 >= 0 => x >= 3
-                # End: x+4 < actual_trs => x < actual_trs - 4
-                for x in range(3, actual_trs - 4):
-                    self.all_samples.append((subj, story_name, x))
-        
-        logger.info(f"Preprocessing complete. Total samples: {len(self.all_samples)}")
-        
-
-    def __len__(self):
-        return len(self.all_samples)
-
-    def __getitem__(self, index):
-        subj, story, x = self.all_samples[index]
-        
-        # BRAIN INPUT: 4 TR window after target stimulus [x+1:x+1+4]
-        bold_window = self.bold_data[subj][story][x+1:x+5]
-        
-        metadata = self.story_metadata[story]
-        tr_times = metadata["tr_times"]
-        word_intervals = metadata["word_intervals"]
-        
-        # Helper to get words in a TR range
-        def get_words(tr_start, tr_end):
-            t_start = tr_times[tr_start]
-            t_end = tr_times[tr_end+1] if tr_end+1 < len(tr_times) else tr_times[-1] + 2.0
-            
-            noise_tokens = {"sp", "uh", "um"}
-            words = [i["text"].lower().strip() for i in word_intervals 
-                     if i["xmin"] >= t_start and i["xmin"] < t_end]
-            words = [w for w in words if w not in noise_tokens and len(w) > 0]
-            return " ".join(words) if words else ""
-
-        # CONTEXT: TRs [x-3, x-2, x-1]
-        context_text = get_words(x-3, x-1)
-        
-        # TARGET: TR x
-        target_text = get_words(x, x)
-        
-        return {
-            "bold": torch.from_numpy(bold_window).float(), # (4, 1000)
-            "context": context_text,
-            "target": target_text,
-            "subject": subj,
-            "story": story,
-            "tr": x,
-            "time_window": (tr_times[x], tr_times[x+1] if x+1 < len(tr_times) else tr_times[x]+2.0)
-        }
-
-if __name__ == "__main__":
-    import os
-    torch.manual_seed(42)
+def main():
+    parser = argparse.ArgumentParser(description="Convergent Minds: Huth Brain-to-LLM Alignment")
+    parser.add_argument("--use-vae", action="store_true", help="Use a VAE stem (reconstruction + KL) instead of a simple MLP.")
+    parser.add_argument("--loss-type", type=str, choices=["info_nce", "mse"], default="info_nce", help="Loss function for alignment.")
+    parser.add_argument("--epochs", type=str, default="20", help="Comma-separated phase epochs: '10,10' for VAE warmup then Align, or '20' for joint.")
+    args = parser.parse_args()
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    logger.info("--- Huth VAE Pipeline Environment ---")
-    logger.info(f"CONVMINDS_HOME: {os.environ.get('CONVMINDS_HOME', '~/.convminds (default)')}")
-    logger.info(f"HF_HOME: {os.environ.get('HF_HOME', '~/.cache/huggingface (default)')}")
-    logger.info(f"Using device: {device}")
-    logger.info("---------------------------------------")
-    
-    # Subjects (Starting with 4 for speed, user suggested 8)
-    # Ensure datalad download for ds003020 derivative is ready!
-    subject_ids = ["S1"] # Fixed: focusing on S1 as requested
-    
-    # 1. Dataset & Loaders
-    dataset = HuthVaeDataset(subject_ids=subject_ids, trim=5, device=device)
-    total_len = len(dataset)
-    train_len = int(0.9 * total_len)
-    test_len = total_len - train_len
-    train_set, test_set = Subset(dataset, range(train_len)), Subset(dataset, range(train_len, total_len))
+    logger.info(f"Devices: {device} | Use VAE: {args.use_vae} | Loss: {args.loss_type}")
+
+    # 1. Load Data
+    logger.info("Initializing Huth Alignment Benchmark...")
+    train_set = HuthAlignmentDataset(subject_ids=["S1"], split="train")
+    test_set = HuthAlignmentDataset(subject_ids=["S1"], split="test")
     
     train_loader = DataLoader(train_set, batch_size=256, shuffle=True, drop_last=True)
     test_loader = DataLoader(test_set, batch_size=256, shuffle=False)
     
-    # 2. GPT-2 Embedder for Target Latents
-    logger.info("Initializing GPT-2 Embedder...")
+    # 2. Setup Models
     embedder = GPT2Embedder(device=device)
+    model = BrainLanguageAdapter(use_vae=args.use_vae).to(device)
+    optimizer = AdamW(model.parameters(), lr=1e-4)
     
-    # 3. Model & Loss (Tripartite)
-    model = VaeBrainAdapter(input_dim=1000, n_frames=4, latent_dim=768).to(device)
+    # 3. Training logic
+    phase_epochs = [int(e) for e in args.epochs.split(",")]
+    total_epochs = sum(phase_epochs)
     
-    # 7. TRAINING LOOP (Phases 1 & 2)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    criterion = TripartiteVAELoss()
-    scheduler = CosineAnnealingLR(optimizer, T_max=15)
-    
-    results_comparison = {}
-    
-    # --- EXPERIMENT RUNNER ---
-    def run_experiment(exp_name, use_vae_warmup=True):
-        logger.info(f"\n{'='*40}")
-        logger.info(f"RUNNING EXPERIMENT: {exp_name}")
-        logger.info(f"{'='*40}")
-        
-        model = VaeBrainAdapter(input_dim=1000, n_frames=4, latent_dim=768).to(device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-        scheduler = CosineAnnealingLR(optimizer, T_max=20)
-        criterion = TripartiteVAELoss()
-        
-        total_epochs = 20
-        for epoch in range(1, total_epochs + 1):
-            model.train()
-            epoch_losses = {"rec": [], "align": []}
+    for epoch in range(1, total_epochs + 1):
+        model.train()
+        # Phase logic: 
+        # If '10,10' -> Epoch 1-10 is Phase 1 (VAE Recon if use_vae), 11-20 is Phase 2 (Align)
+        if len(phase_epochs) > 1:
+            phase = 1 if epoch <= phase_epochs[0] else 2
+        else:
+            phase = 2 # Default to alignment if single epoch count provided
             
-            # Model A: 1-10 Recon, 11-20 Align
-            # Model B: 1-20 Align
-            if use_vae_warmup:
-                phase = 1 if epoch <= 10 else 2
+        pbar = tqdm(train_loader, desc=f"Ep {epoch:2d} | Ph {phase}")
+        for batch in pbar:
+            x, ctx, target = batch["bold"].to(device), batch["context"], batch["target"]
+            h_text = embedder.embed_with_context(ctx, target).to(device)
+            
+            outputs = model(x)
+            loss_dict = {}
+            
+            if args.use_vae and phase == 1:
+                # Reconstruction only
+                res = vae_reconstruction_loss(outputs["x_hat"], outputs["x_orig"], outputs["mu"], outputs["logvar"])
+                loss = res["loss"]
+                loss_dict = {"loss": loss.item(), "rec": res["rec_loss"].item()}
             else:
-                phase = 2
-            
-            pbar = tqdm(train_loader, desc=f"[{exp_name}] Ep {epoch:2d}")
-            for batch in pbar:
-                x = batch["bold"].to(device)
-                h_text = embedder.embed_with_context(batch["context"], batch["target"]).to(device)
-                outputs = model(x)
-                
-                if phase == 1:
-                    criterion.rec_weight = 1.0
-                    criterion.kl_weight = 0.005
-                    criterion.align_weight = 0.0
-                    metrics = criterion(
-                        recon_x=outputs["x_hat"],
-                        x=outputs["x_orig"],
-                        mu=outputs["mu"],
-                        logvar=outputs["logvar"],
-                        z=outputs["z"],
-                        h_text=h_text
-                    )
-                    loss = metrics["loss"]
+                # Alignment (+ Recon choice)
+                if args.loss_type == "info_nce":
+                    align_loss = info_nce_loss(outputs["h_llm"], h_text)
                 else:
-                    loss = info_nce_loss(outputs["mu"], h_text)
-                    metrics = {"rec_loss": torch.tensor(0.0), "align_loss": loss}
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    align_loss = F.mse_loss(outputs["h_llm"], h_text)
                 
-                if phase == 1:
-                    epoch_losses["rec"].append(metrics["rec_loss"].item())
-                else:
-                    epoch_losses["align"].append(metrics["align_loss"].item())
-            
-            scheduler.step()
-            if phase == 1:
-                logger.info(f"Ep {epoch:2d} | Ph 1 | Train MSE (Recon): {np.mean(epoch_losses['rec']):.4f}")
-            else:
-                logger.info(f"Ep {epoch:2d} | Ph 2 | Train InfoNCE (Align): {np.mean(epoch_losses['align']):.4f}")
-
-        stats = run_eval(model, test_loader)
-        results_comparison[exp_name] = stats
-        return model, stats
-
-    def run_eval(model, loader):
-        model.eval()
-        results = {"mse_recon": [], "mse_align": [], "cosine": [], 
-                   "top10_acc": [], "bleu": [], "rouge1": [], "rougeL": [], "wer": [], "meteor": []}
-        
-        all_mus, all_targets, all_texts = [], [], []
-        
-        with torch.no_grad():
-            for batch in loader:
-                x = batch["bold"].to(device)
-                h_text = embedder.embed_with_context(batch["context"], batch["target"]).to(device)
-                outputs = model(x)
+                loss = align_loss
+                if args.use_vae:
+                    res = vae_reconstruction_loss(outputs["x_hat"], outputs["x_orig"], outputs["mu"], outputs["logvar"])
+                    loss = loss + res["loss"]
+                    loss_dict["rec"] = res["rec_loss"].item()
                 
-                results["mse_recon"].append(torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"])).item())
-                results["mse_align"].append(torch.mean(torch.square(outputs["mu"] - h_text)).item())
-                results["cosine"].append(F.cosine_similarity(outputs["mu"], h_text, dim=-1).mean().item())
-                
-                # Identification Acc (using native convminds metric)
-                results["top10_acc"].append(identification_accuracy(outputs["mu"], h_text, top_k=10))
-                
-                all_mus.append(outputs["mu"])
-                all_targets.append(h_text)
-                all_texts.extend(batch["target"])
-        
-        # Retrieval-based NLP Decoding
-        full_mus = torch.cat(all_mus, dim=0)
-        full_targets = torch.cat(all_targets, dim=0)
-        scores = F.cosine_similarity(full_mus.unsqueeze(1), full_targets.unsqueeze(0), dim=-1)
-        
-        for i in range(len(all_texts)):
-            best_match_idx = torch.argmax(scores[i]).item()
-            nlp_stats = calculate_nlp_metrics(all_texts[best_match_idx], all_texts[i])
-            for k, v in nlp_stats.items():
-                results[k].append(v)
-            
-        return {k: np.mean(v) if v else 0.0 for k, v in results.items()}
+                loss_dict["align"] = align_loss.item()
+                loss_dict["loss"] = loss.item()
 
-    results_comparison = {}
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            pbar.set_postfix(loss_dict)
 
-    # --- ARGUMENT PARSING ---
-    parser = argparse.ArgumentParser(description="Brain-to-LLM VAE Adapter training.")
-    parser.add_argument("--mode", type=str, choices=["two_phase", "one_phase", "both"], default="both",
-                        help="Execution mode: 'two_phase' (VAE -> Align), 'one_phase' (Direct Align), or 'both'.")
-    args = parser.parse_args()
-
-    # --- EXECUTION ---
-    stats_a, stats_b = {}, {}
-    model_a, model_b = None, None
+    # 4. Final Evaluation
+    logger.info("\n" + "="*40)
+    logger.info("FINAL PERFORMANCE REPORT")
+    logger.info("="*40)
+    stats = run_eval(model, test_loader, embedder, device)
+    for k, v in stats.items():
+        fmt = f"{v*100:.2f}%" if k in ["top10_acc", "bleu", "rouge1", "rougeL", "meteor"] else f"{v:.4f}"
+        logger.info(f"{k.upper():<12}: {fmt}")
     
-    if args.mode in ["two_phase", "both"]:
-        # Model A: Sequential (VAE -> Align)
-        model_a, stats_a = run_experiment("Model_A (Sequential)", use_vae_warmup=True)
-    
-    if args.mode in ["one_phase", "both"]:
-        # Model B: Direct (Align only)
-        model_b, stats_b = run_experiment("Model_B (Direct Align)", use_vae_warmup=False)
-
-    # Comparison Report
-    logger.info("\n" + "="*60)
-    logger.info("FINAL ABLATION COMPARISON REPORT")
-    logger.info("="*60)
-    
-    if args.mode == "both":
-        logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15} | {'Model B (Dir)':<15}")
-    elif args.mode == "two_phase":
-        logger.info(f"{'Metric':<20} | {'Model A (Seq)':<15}")
-    else:
-        logger.info(f"{'Metric':<20} | {'Model B (Dir)':<15}")
-        
-    logger.info("-" * 60)
-    # Filter for interesting metrics
-    metrics_to_show = ["mse_align", "cosine", "top10_acc", "bleu", "rouge-1", "rouge-L", "wer", "meteor"]
-    for k in metrics_to_show:
-        key = k.replace("-", "") if k != "rouge-L" else "rougeL"
-        if key == "rouge1": key="rouge1"
-        
-        row = f"{k:<20} | "
-        if args.mode in ["two_phase", "both"]:
-            val_a = stats_a[key]
-            if key in ["top10_acc", "bleu", "rouge1", "rougeL", "meteor"]:
-                row += f"{val_a*100:<14.2f}% | "
-            else:
-                row += f"{val_a:<15.4f} | "
-        
-        if args.mode in ["one_phase", "both"]:
-            val_b = stats_b[key]
-            if key in ["top10_acc", "bleu", "rouge1", "rougeL", "meteor"]:
-                row += f"{val_b*100:<14.2f}%"
-            else:
-                row += f"{val_b:<15.4f}"
-        
-        logger.info(row)
-    logger.info("="*60)
-    
-    # Track first batch samples to see actual text decoding
-    test_samples = []
-    final_model = model_a if args.mode in ["two_phase", "both"] else model_b
-    final_model.eval()
-    
-    # We also need the full bank for retrieval
-    all_mus, all_texts = [], []
+    # 5. Visual Samples
+    logger.info("\n" + "="*40)
+    logger.info("DECODING SAMPLES")
+    logger.info("="*40)
+    model.eval()
     with torch.no_grad():
-        for batch in test_loader:
-            x = batch["bold"].to(device)
-            outputs = final_model(x)
-            all_mus.append(outputs["mu"])
-            all_texts.extend(batch["target"])
-    full_mus = torch.cat(all_mus, dim=0)
+        # Just grab one batch for samples
+        batch = next(iter(test_loader))
+        x, ctx, target = batch["bold"].to(device), batch["context"], batch["target"]
+        outputs = model(x)
+        h_pred = outputs["h_llm"]
+        
+        # Retrieval for sample 1
+        scores = F.cosine_similarity(h_pred[0:1], h_pred, dim=-1) # self-check just for visual
+        top_tokens = embedder.predict_tokens(h_pred[:3], top_k=3)
+        
+        for i in range(3):
+            logger.info(f"\n[{i+1}] {batch['subject'][i]} | {batch['story'][i]} | TR {batch['tr'][i]}")
+            logger.info(f"  CONTEXT  : {ctx[i][:100]}...")
+            logger.info(f"  TRUE     : {target[i]}")
+            # top brain tokens
+            tok_str = ", ".join([f"{t} ({p*100:.1f}%)" for t, p in top_tokens[i]])
+            logger.info(f"  PREDICTED: {tok_str}")
 
-    # Re-evaluate the first 5 samples from the loader for visual inspection
-    with torch.no_grad():
-        for batch in test_loader:
-            x = batch["bold"].to(device)
-            contexts = batch["context"]
-            targets = batch["target"]
-            outputs = final_model(x)
-            
-            # For visual inspection, find closest in full_mus
-            scores = F.cosine_similarity(outputs["mu"].unsqueeze(1), full_mus.unsqueeze(0), dim=-1)
-            
-            # Use LM Head to get pure token predictions
-            token_preds = embedder.predict_tokens(outputs["mu"], top_k=3)
-            
-            for j in range(min(5, len(targets))):
-                best_idx = torch.argmax(scores[j]).item()
-                test_samples.append({
-                    "id": f"{batch['subject'][j]} | {batch['story'][j]} | TR {batch['tr'][j]}",
-                    "context": contexts[j],
-                    "target": targets[j],
-                    "predicted": all_texts[best_idx],
-                    "top_tokens": token_preds[j],
-                    "time": batch["time_window"][j]
-                })
-            break # only use first batch for visual table 1
-
-    logger.info("\n" + "="*60)
-    logger.info("VISUAL BRAIN DECODING SAMPLES")
-    logger.info("="*60)
-    for i, s in enumerate(test_samples):
-        logger.info(f"\n[{i+1}] {s['id']}")
-        logger.info(f"  CONTEXT:  \"{s['context']}\"")
-        logger.info(f"  TRUE:     \"{s['target']}\"")
-        logger.info(f"  RETRIEVED: \"{s['predicted']}\"")
-        # Format Top-3 tokens
-        tok_str = ", ".join([f"{t} ({p*100:.1f}%)" for t, p in s['top_tokens']])
-        logger.info(f"  BRAIN-TOKENS: {tok_str}")
-    # --- MODEL SAVING ---
-    convminds_home = os.environ.get("CONVMINDS_HOME", ".")
-    save_dir = os.path.join(convminds_home, "models", "huth_vae_ablation")
+    # 6. Save Model
+    save_dir = os.path.join(os.environ.get("CONVMINDS_HOME", "."), "models", "huth_alignment")
     os.makedirs(save_dir, exist_ok=True)
-    
-    if model_a:
-        save_path_a = os.path.join(save_dir, "vae_seq_adapter.pt")
-        torch.save(model_a.state_dict(), save_path_a)
-        logger.info(f"Model A (Sequential) saved to: {save_path_a}")
-        
-    if model_b:
-        save_path_b = os.path.join(save_dir, "vae_direct_adapter.pt")
-        torch.save(model_b.state_dict(), save_path_b)
-        logger.info(f"Model B (Direct) saved to: {save_path_b}")
+    mode_str = "vae" if args.use_vae else "mlp"
+    save_path = os.path.join(save_dir, f"huth_{mode_str}_{args.loss_type}.pt")
+    torch.save(model.state_dict(), save_path)
+    logger.info(f"\nModel saved to: {save_path}")
 
-    logger.info("\nUniversal Brain-to-LLM Adapter training finalized.")
+if __name__ == "__main__":
+    main()
