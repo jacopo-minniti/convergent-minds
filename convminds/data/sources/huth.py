@@ -98,7 +98,7 @@ class HuthRecordingSource(HumanRecordingSource):
         
         if not benchmark.stimuli:
             logger.error(f"Benchmark stimuli list is empty for {subject_id}. Check TextGrids and hf5 files.")
-            raise ValueError(f"No stimuli (stories) found for benchmark {benchmark.name} and subject {subject_id}")
+            raise ValueError(f"No stimuli (stories) found for benchmark {benchmark.identifier} and subject {subject_id}")
 
         stories = [s.stimulus_id for s in benchmark.stimuli]
         logger.info(f"Attempting to load recordings for {len(stories)} stories from {subject_dir}")

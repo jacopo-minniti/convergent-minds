@@ -122,18 +122,22 @@ class HuthBenchmark(BaseBenchmark):
 
     def _load_or_prepare_stimuli(self) -> StimulusSet:
         if self.processed_path.exists():
-            logger.info(f"Loading cached Huth stimuli from {self.processed_path}")
+            logger.info(f"Checking cached Huth stimuli at {self.processed_path}")
             df = pd.read_pickle(self.processed_path)
-            records = []
-            for _, row in df.iterrows():
-                records.append(StimulusRecord(
-                    stimulus_id=row["stimulus_id"],
-                    text=row["text"],
-                    topic=row["story"],
-                    metadata=row.get("metadata", {})
-                ))
-            return StimulusSet(records=records)
-
+            if len(df) > 0:
+                logger.info(f"Loaded {len(df)} cached stimuli for {self.subject_id}")
+                records = []
+                for _, row in df.iterrows():
+                    records.append(StimulusRecord(
+                        stimulus_id=row["stimulus_id"],
+                        text=row["text"],
+                        topic=row["story"],
+                        metadata=row.get("metadata", {})
+                    ))
+                return StimulusSet(records=records)
+            else:
+                logger.warning(f"Cached stimuli file for {self.subject_id} is empty. Re-processing...")
+        
         return self.prepare_processed()
 
     def prepare_processed(self) -> StimulusSet:
