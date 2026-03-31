@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from torch.utils.data import Dataset
-from convminds.data.benchmarks.huth import HuthBenchmark
+from convminds.benchmarks import HuthBenchmark
 
 class HuthAlignmentDataset(Dataset):
     """
