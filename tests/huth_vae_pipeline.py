@@ -246,14 +246,16 @@ if __name__ == "__main__":
             
             if phase == 1:
                 # Standard ELBO: MSE + beta*KL
+                criterion.rec_weight = 1.0
+                criterion.kl_weight = 0.01
+                criterion.align_weight = 0.0
                 metrics = criterion(
-                    x_hat=outputs["x_hat"],
-                    x_orig=outputs["x_orig"],
+                    recon_x=outputs["x_hat"],
+                    x=outputs["x_orig"],
                     mu=outputs["mu"],
                     logvar=outputs["logvar"],
-                    rec_weight=1.0,
-                    kl_weight=0.01,
-                    align_weight=0.0
+                    z=outputs["z"],
+                    h_text=h_text
                 )
             else:
                 # Alignment: MSE(mu, e_text) + lambda*MSE(recon)
@@ -311,10 +313,15 @@ if __name__ == "__main__":
             h_text = embedder.embed(texts).to(device)
             
             outputs = model(x)
-            metrics = loss_fn(
-                recon_x=outputs["x_hat"], 
-                x=outputs["x_orig"], 
-                mu=outputs["mu"], 
+            # Final eval uses Phase 2 logic (Alignment focused)
+            criterion.rec_weight = 1.0
+            criterion.kl_weight = 0.0 
+            criterion.align_weight = 0.0 # We calculate align_mse manually below for mu
+            
+            metrics = criterion(
+                recon_x=outputs["x_hat"],
+                x=outputs["x_orig"],
+                mu=outputs["mu"],
                 logvar=outputs["logvar"],
                 z=outputs["z"],
                 h_text=h_text
