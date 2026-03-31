@@ -166,15 +166,23 @@ class HuthVaeDataset(Dataset):
         t_start = tr_times[t-2]
         t_end = tr_times[t+1] if t+1 < len(tr_times) else tr_times[-1] + 2.0
         
-        context_words = [i["text"] for i in word_intervals if i["xmin"] >= t_start and i["xmin"] < t_end]
+        # Clean tokens to remove silence cues (sp) and non-semantic fillers
+        noise_tokens = {"sp", "uh", "um"}
+        context_words = [i["text"].lower().strip() for i in word_intervals 
+                        if i["xmin"] >= t_start and i["xmin"] < t_end]
+        context_words = [w for w in context_words if w not in noise_tokens and len(w) > 0]
         context_text = " ".join(context_words) if context_words else " "
+        
+        # Add time window info for diagnostics
+        t_win = (t_start, t_end)
         
         return {
             "bold": torch.from_numpy(bold_window).float(), # (4, 1000)
             "text": context_text,
             "subject": subj,
             "story": story,
-            "tr": t
+            "tr": t,
+            "time_window": t_win
         }
 
 if __name__ == "__main__":
@@ -329,12 +337,21 @@ if __name__ == "__main__":
             # Save first two samples from the first test batch
             if i == 0:
                 for j in range(min(2, len(texts))):
+                    # For numerical comparison, take first few components of first frame
+                    hat_vals = outputs["x_hat"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
+                    orig_vals = outputs["x_orig"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
+                    
                     test_samples.append({
+                        "id": f"{batch['subject'][j]} | {batch['story'][j]} | TR {batch['tr'][j]}",
                         "text": texts[j],
-                        "subject": batch["subject"][j],
-                        "story": batch["story"][j],
-                        "tr": batch.get("tr", [0]*len(texts))[j]
+                        "w_count": len(texts[j].split()),
+                        "time": batch["time_window"][j],
+                        "hat_pca": hat_vals,
+                        "orig_pca": orig_vals
                     })
+                
+                # Batch info
+                logger.info(f"  First Eval Batch Avg Context length: {np.mean([len(t.split()) for t in texts]):.1f} words")
 
     final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
     final_corr = sum(test_metrics["corr"]) / len(test_metrics["corr"])
@@ -351,10 +368,16 @@ if __name__ == "__main__":
     logger.info(f"  Var Explained:    {final_ve*100:.2f}%")
     logger.info("---------------------------------------")
     
-    logger.info("\nSAMPLE TEST INSTANCES:")
+    logger.info("\nSAMPLE TEST INSTANCES (Numerical Decode Analysis):")
     for i, s in enumerate(test_samples):
-        logger.info(f"Sample {i+1} [{s['subject']} | {s['story']} | TR {s['tr']}]:")
-        logger.info(f"  Context Text: \"{s['text']}\"")
+        logger.info(f"Sample: {s['id']}")
+        logger.info(f"  Time Window:  {s['time'][0].item():.1f}s -> {s['time'][1].item():.1f}s")
+        logger.info(f"  Context Text: \"{s['text']}\" ({s['w_count']} words)")
+        logger.info(f"  Top 5 PCA (Pred): {s['hat_pca']}")
+        logger.info(f"  Top 5 PCA (True): {s['orig_pca']}")
+        # Calculate local Pearson for these 5
+        local_c = np.corrcoef(s['hat_pca'], s['orig_pca'])[0, 1]
+        logger.info(f"  Local Component Correlation: {local_c:.4f}")
         logger.info("-" * 30)
 
     logger.info("\nUniversal Brain-to-LLM Adapter training finalized.")
