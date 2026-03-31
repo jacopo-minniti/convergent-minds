@@ -226,12 +226,51 @@ if __name__ == "__main__":
     total_epochs = 15
     logger.info(f"Starting 2-Phase Training ({total_epochs} epochs)...")
     
+    def run_eval(model, loader, mode="similarity"):
+        model.eval()
+        results = {"mse_recon": [], "mse_align": [], "cosine": [], "corr": [], "top10_acc": []}
+        
+        with torch.no_grad():
+            for batch in loader:
+                x = batch["bold"].to(device)
+                h_text = embedder.embed(batch["text"]).to(device)
+                outputs = model(x)
+                
+                # Metrics
+                mse_recon = torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"])).item()
+                mse_align = torch.mean(torch.square(outputs["mu"] - h_text)).item()
+                
+                # Cosine Similarity
+                cos = F.cosine_similarity(outputs["mu"], h_text, dim=-1).mean().item()
+                
+                # Brain-to-Text Correlation
+                flat_hat = outputs["x_hat"].cpu().numpy()
+                flat_orig = outputs["x_orig"].cpu().numpy()
+                corr = np.corrcoef(flat_hat.flatten(), flat_orig.flatten())[0, 1]
+                
+                # Identification Accuracy (Top-10)
+                # How many predicted 'mu' are closest to their corresponding 'h_text' in the batch?
+                if outputs["mu"].shape[0] > 1:
+                    dist_matrix = torch.cdist(outputs["mu"], h_text) # (B, B)
+                    for i in range(dist_matrix.shape[0]):
+                        # Get indices of top 10 closest text embeddings for this brain sample
+                        top10 = torch.topk(dist_matrix[i], k=min(10, dist_matrix.shape[0]), largest=False).indices
+                        if i in top10:
+                            results["top10_acc"].append(1.0)
+                        else:
+                            results["top10_acc"].append(0.0)
+                
+                results["mse_recon"].append(mse_recon)
+                results["mse_align"].append(mse_align)
+                results["cosine"].append(cos)
+                results["corr"].append(corr)
+                
+        return {k: np.mean(v) if v else 0.0 for k, v in results.items()}
+
     for epoch in range(1, total_epochs + 1):
         model.train()
-        epoch_losses = {"total": [], "rec": [], "kl": [], "align": []}
+        epoch_losses = {"rec": [], "align": []}
         
-        # Phase 1: Manifold Reconstruction (Epochs 1-5)
-        # Phase 2: Embedding Alignment Task (Epochs 6-15)
         phase = 1 if epoch <= 5 else 2
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch} (Phase {phase})")
@@ -282,112 +321,64 @@ if __name__ == "__main__":
                 metrics["loss"].backward()
                 optimizer.step()
             
-            epoch_losses["total"].append(metrics["loss"].item())
-            epoch_losses["rec"].append(metrics["rec_loss"].item())
-            epoch_losses["kl"].append(metrics["kl_loss"].item())
-            epoch_losses["align"].append(metrics["align_loss"].item())
+            if phase == 1:
+                epoch_losses["rec"].append(metrics["rec_loss"].item())
+            else:
+                epoch_losses["align"].append(metrics["align_loss"].item())
         
-        avg_rec = sum(epoch_losses["rec"]) / len(epoch_losses["rec"])
-        avg_align = sum(epoch_losses["align"]) / len(epoch_losses["align"])
-        logger.info(f"Epoch {epoch} complete | Phase {phase} | Train MSE: {avg_rec:.4f} | Align MSE: {avg_align:.4f}")
+        if phase == 1:
+            avg_rec = np.mean(epoch_losses["rec"])
+            logger.info(f"Epoch {epoch:2d} | Phase 1 | Train MSE (Recon): {avg_rec:.4f}")
+        else:
+            avg_align = np.mean(epoch_losses["align"])
+            logger.info(f"Epoch {epoch:2d} | Phase 2 | Train MSE (Align): {avg_align:.4f}")
+            
         scheduler.step()
+
+        # Intermediate Evaluation: After Phase 1 (Epoch 5)
+        if epoch == 5:
+            logger.info("\n--- INTERMEDIATE EVALUATION (Reconstruction Task) ---")
+            stats = run_eval(model, test_loader)
+            logger.info(f"  MSE (Recon):      {stats['mse_recon']:.4f}")
+            logger.info(f"  Global Corr:      {stats['corr']:.4f}")
+            logger.info(f"  Manifold Quality (Var Exp): {(1.0 - stats['mse_recon'])*100:.2f}%")
+            logger.info("------------------------------------------------------\n")
     
     # 5. Final Evaluation
-    logger.info("\nStarting Final Evaluation on Test Set...")
-    model.eval()
-    test_metrics = {
-        "recon": [],
-        "align": [],
-        "corr": [],
-        "corr_top10": [],
-        "corr_sample": [],
-        "var_exp": []
-    }
+    logger.info("\n--- FINAL EVALUATION (Similarity Task) ---")
+    stats = run_eval(model, test_loader)
     
-    # Track a few samples
+    logger.info("ALIGNMENT PERFORMANCE:")
+    logger.info(f"  MSE (Align):          {stats['mse_align']:.4f}")
+    logger.info(f"  Mean Cosine Sim:      {stats['cosine']:.4f}")
+    logger.info(f"  Identification Acc:   {stats['top10_acc']*100:.2f}% (Top-10 in batch)")
+    logger.info("-" * 30)
+    
+    logger.info("RECONSTRUCTION (Residual):")
+    logger.info(f"  MSE (Recon):          {stats['mse_recon']:.4f}")
+    logger.info(f"  Global Corr:          {stats['corr']:.4f}")
+    logger.info("-" * 30)
+    
+    # Track a few samples for numerical analysis
     test_samples = []
-    
+    model.eval()
     with torch.no_grad():
-        for i, batch in enumerate(tqdm(test_loader, desc="Evaluating")):
+        for batch in test_loader:
             x = batch["bold"].to(device)
             texts = batch["text"]
-            h_text = embedder.embed(texts).to(device)
-            
             outputs = model(x)
-            # Evaluation focuses on Brain-to-Text alignment logic
-            # Use मु (mu) vs h_text as the primary test
-            align_mse = torch.mean(torch.square(outputs["mu"] - h_text)).item()
-            rec_mse = torch.mean(torch.square(outputs["x_hat"] - outputs["x_orig"])).item()
-            
-            test_metrics["align"].append(align_mse)
-            test_metrics["recon"].append(rec_mse)
-            
-            # Correlation check
-            flat_hat = outputs["x_hat"].detach().cpu().numpy() # (B, 4000)
-            flat_orig = outputs["x_orig"].detach().cpu().numpy() # (B, 4000)
-            
-            # Global Correlation
-            corr = np.corrcoef(flat_hat.flatten(), flat_orig.flatten())[0, 1]
-            test_metrics["corr"].append(corr)
-            
-            # Correlation on the top few PCA components (first 10 of each frame)
-            # shapes are (B, 4, 1000) reshaped to (B, 4000)
-            top10_hat = flat_hat.reshape(-1, 4, 1000)[:, :, :10].flatten()
-            top10_orig = flat_orig.reshape(-1, 4, 1000)[:, :, :10].flatten()
-            test_metrics["corr_top10"].append(np.corrcoef(top10_hat, top10_orig)[0, 1])
-            
-            # Per-sample correlation (average of correlations for each sample in batch)
-            # flat_hat: (B, 4000)
-            sample_corrs = []
-            for b in range(flat_hat.shape[0]):
-                c = np.corrcoef(flat_hat[b], flat_orig[b])[0, 1]
-                if not np.isnan(c):
-                    sample_corrs.append(c)
-            test_metrics["corr_sample"].append(np.mean(sample_corrs) if sample_corrs else 0.0)
-            
-            # Variance explained: 1 - MSE / Var(Orig)
-            mse = rec_mse
-            var_orig = flat_orig.var() if flat_orig.size > 0 else 1.0
-            test_metrics["var_exp"].append(1.0 - (mse / var_orig))
-            
-            if i == 0:
-                logger.debug(f"  Eval Batch Recon Stats: Mean={flat_hat.mean():.4f}, Std={flat_hat.std():.4f}")
-            
-            # Save first two samples from the first test batch
-            if i == 0:
-                for j in range(min(2, len(texts))):
-                    # For numerical comparison, take first few components of first frame
-                    hat_vals = outputs["x_hat"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
-                    orig_vals = outputs["x_orig"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
-                    
-                    test_samples.append({
-                        "id": f"{batch['subject'][j]} | {batch['story'][j]} | TR {batch['tr'][j]}",
-                        "text": texts[j],
-                        "w_count": len(texts[j].split()),
-                        "time": batch["time_window"][j],
-                        "hat_pca": hat_vals,
-                        "orig_pca": orig_vals
-                    })
-                
-                # Batch info
-                logger.info(f"  First Eval Batch Avg Context length: {np.mean([len(t.split()) for t in texts]):.1f} words")
-
-    final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
-    final_align = sum(test_metrics["align"]) / len(test_metrics["align"])
-    final_corr = sum(test_metrics["corr"]) / len(test_metrics["corr"])
-    final_corr_top = sum(test_metrics["corr_top10"]) / len(test_metrics["corr_top10"])
-    final_corr_sample = sum(test_metrics["corr_sample"]) / len(test_metrics["corr_sample"])
-    final_ve = sum(test_metrics["var_exp"]) / len(test_metrics["var_exp"])
-    
-    logger.info("---------------------------------------")
-    logger.info("FINAL TEST RESULTS:")
-    logger.info(f"  MSE (Recon):      {final_recon:.4f}")
-    logger.info(f"  MSE (Align):      {final_align:.4f}")
-    logger.info(f"  Global Corr:      {final_corr:.4f}")
-    logger.info(f"  Top 10 Comp Corr: {final_corr_top:.4f}")
-    logger.info(f"  Mean Sample Corr: {final_corr_sample:.4f}")
-    logger.info(f"  Var Explained:    {final_ve*100:.2f}%")
-    logger.info("---------------------------------------")
+            for j in range(min(2, len(texts))):
+                hat_vals = outputs["x_hat"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
+                orig_vals = outputs["x_orig"][j].view(4, 1000)[0, :5].detach().cpu().numpy()
+                test_samples.append({
+                    "id": f"{batch['subject'][j]} | {batch['story'][j]} | TR {batch['tr'][j]}",
+                    "text": texts[j],
+                    "w_count": len(texts[j].split()),
+                    "time": batch["time_window"][j],
+                    "hat_pca": hat_vals,
+                    "orig_pca": orig_vals
+                })
+            break # Just need first batch samples
     
     logger.info("\nSAMPLE TEST INSTANCES (Numerical Decode Analysis):")
     for i, s in enumerate(test_samples):
