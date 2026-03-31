@@ -25,36 +25,47 @@ class TextGrid:
         self._parse(content)
 
     def _parse(self, content: str):
-        # Extremely simplified parser for "ooTextFile" format
-        # Finds items (tiers) and their intervals
-        # Handle both "item [1]:" and "item [1]"
-        items = re.split(r'item\s*\[\s*\d+\s*\]\s*:?', content)
-        for item in items[1:]:
-            tier_name_match = re.search(r'name\s*=\s*"(.*?)"', item)
-            if not tier_name_match:
+        # 1. Split into tier blocks (item [1]:, item [2]:, etc.)
+        item_blocks = re.split(r'item\s*\[\s*\d+\s*\]\s*:?', content)
+        
+        for block in item_blocks[1:]:
+            # Find the tier name (name = "word")
+            name_match = re.search(r'name\s*=\s*"(.*?)"', block)
+            if not name_match:
                 continue
             
-            tier_name = tier_name_match.group(1).lower()
-            intervals = []
+            tier_name = name_match.group(1).lower().strip()
             
-            # More robust interval regex: find everything between intervals[...] and the next one
-            interval_blocks = re.findall(r'intervals\s*\[\s*\d+\s*\]\s*:?.*?(?=intervals\s*\[|$)', item, re.DOTALL)
-            for block in interval_blocks:
-                # Find xmin/xmax/text with or without quotes/equal signs
-                xmin = re.search(r'xmin\s*[=:]\s*([\d\.]+)', block)
-                xmax = re.search(r'xmax\s*[=:]\s*([\d\.]+)', block)
-                text = re.search(r'text\s*[=:]\s*"(.*?)"', block)
-                if xmin and xmax and text:
+            # Find starts of each interval [X] within this tier block
+            starts = [m.start() for m in re.finditer(r'intervals\s*\[\s*\d+\s*\]', block)]
+            if not starts:
+                continue
+            
+            intervals = []
+            for i in range(len(starts)):
+                # Take everything from current start to the next start (or end of block)
+                end = starts[i+1] if i + 1 < len(starts) else len(block)
+                segment = block[starts[i]:end]
+                
+                xmin_m = re.search(r'xmin\s*[=:]\s*([\d\.\-\+e]+)', segment)
+                xmax_m = re.search(r'xmax\s*[=:]\s*([\d\.\-\+e]+)', segment)
+                text_m = re.search(r'text\s*[=:]\s*"(.*?)"', segment, re.DOTALL)
+                
+                if xmin_m and xmax_m and text_m:
                     intervals.append({
-                        "xmin": float(xmin.group(1)),
-                        "xmax": float(xmax.group(1)),
-                        "text": text.group(1)
+                        "xmin": float(xmin_m.group(1)),
+                        "xmax": float(xmax_m.group(1)),
+                        "text": text_m.group(1)
                     })
+            
             if intervals:
                 self.tiers.append({"name": tier_name, "intervals": intervals})
+                logger.debug(f"Parsed tier {tier_name} with {len(intervals)} intervals.")
+            else:
+                logger.debug(f"Found tier {tier_name} but zero valid intervals were parsed.")
         
         if not self.tiers:
-            logger.debug("TextGrid parsing yielded no tiers.")
+            logger.warning("No tiers found or parsed in TextGrid content.")
 
     def get_tier(self, name: str):
         name = name.lower()
