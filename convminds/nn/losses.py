@@ -70,8 +70,10 @@ class TripartiteVAELoss(nn.Module):
         z: torch.Tensor, 
         h_text: torch.Tensor
     ) -> dict[str, torch.Tensor]:
-        # 1. Reconstruction Loss (MSE)
-        rec_loss = F.mse_loss(recon_x, x)
+        # 1. Reconstruction Loss (MSE per sample)
+        # We use squared error summed over features and averaged over batch
+        # This matches the scale of the KL divergence (which is also per sample)
+        rec_loss = F.mse_loss(recon_x, x, reduction='sum') / x.shape[0]
         
         # 2. KL Divergence
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=-1).mean()

@@ -204,7 +204,12 @@ if __name__ == "__main__":
     loss_fn = TripartiteVAELoss(rec_weight=1.0, kl_weight=0.005, align_weight=0.5, temperature=0.07).to(device)
     
     # 4. Optimization
-    optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=0.01)
+    # We must optimize both the model parameters AND the learnable loss parameters (for temperature)
+    optimizer = AdamW(
+        list(model.parameters()) + list(loss_fn.parameters()), 
+        lr=3e-4, 
+        weight_decay=0.01
+    )
     scheduler = CosineAnnealingLR(optimizer, T_max=100) # Simplified scheduler for brevity
     
     logger.info("Starting Training Loop...")
@@ -242,7 +247,7 @@ if __name__ == "__main__":
             optimizer.step()
             
             epoch_losses["loss"].append(metrics["loss"].item())
-            epoch_losses["recon"].append(metrics["recon_loss"].item())
+            epoch_losses["recon"].append(metrics["rec_loss"].item())
             epoch_losses["kl"].append(metrics["kl_loss"].item())
             epoch_losses["align"].append(metrics["align_loss"].item())
             
@@ -251,8 +256,10 @@ if __name__ == "__main__":
         avg_kl = sum(epoch_losses["kl"]) / len(epoch_losses["kl"])
         avg_align = sum(epoch_losses["align"]) / len(epoch_losses["align"])
         
+        current_temp = 1.0 / loss_fn.info_nce.logit_scale.exp().item()
+        
         logger.info(f"Epoch {epoch} complete.")
-        logger.info(f"  Train -> Loss: {avg_loss:.4f} | Recon: {avg_recon:.4f} | KL: {avg_kl:.4f} | Align: {avg_align:.4f}")
+        logger.info(f"  Train -> Loss: {avg_loss:.4f} | Recon: {avg_recon:.4f} | KL: {avg_kl:.4f} | Align: {avg_align:.4f} | Temp: {current_temp:.4f}")
         scheduler.step()
     
     # 5. Final Evaluation
@@ -285,7 +292,7 @@ if __name__ == "__main__":
             )
             
             test_metrics["loss"].append(metrics["loss"].item())
-            test_metrics["recon"].append(metrics["recon_loss"].item())
+            test_metrics["recon"].append(metrics["rec_loss"].item())
             test_metrics["kl"].append(metrics["kl_loss"].item())
             test_metrics["align"].append(metrics["align_loss"].item())
             
@@ -303,6 +310,7 @@ if __name__ == "__main__":
     final_recon = sum(test_metrics["recon"]) / len(test_metrics["recon"])
     final_kl = sum(test_metrics["kl"]) / len(test_metrics["kl"])
     final_align = sum(test_metrics["align"]) / len(test_metrics["align"])
+    current_temp = 1.0 / loss_fn.info_nce.logit_scale.exp().item()
     
     logger.info("---------------------------------------")
     logger.info("FINAL TEST METRICS:")
@@ -310,6 +318,7 @@ if __name__ == "__main__":
     logger.info(f"Recon: {final_recon:.4f}")
     logger.info(f"KL:    {final_kl:.4f}")
     logger.info(f"Align: {final_align:.4f}")
+    logger.info(f"Temp:  {current_temp:.4f}")
     logger.info("---------------------------------------")
     
     logger.info("\nSAMPLE TEST INSTANCES:")

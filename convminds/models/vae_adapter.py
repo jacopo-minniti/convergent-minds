@@ -48,7 +48,6 @@ class VaeBrainAdapter(nn.Module):
         self.fc_mu = nn.Linear(1024, latent_dim)
         self.fc_logvar = nn.Linear(1024, latent_dim)
         
-        # Decoder
         self.decoder_mlp = nn.Sequential(
             nn.Linear(latent_dim, 1024),
             nn.LayerNorm(1024),
@@ -58,13 +57,6 @@ class VaeBrainAdapter(nn.Module):
             nn.GELU(),
             nn.Linear(2048, self.flattened_dim)
         )
-        
-        # Contrastive Temperature
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-
-    @property
-    def temperature(self):
-        return self.logit_scale.exp().clamp(max=100) # (1 / tau)
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
