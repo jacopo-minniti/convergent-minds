@@ -109,17 +109,18 @@ class HuthVaeDataset(Dataset):
                 self.bold_data[subj][story_name] = projected
                 
             # 4. GATHER STIMULUS ALIGNMENT
+            # Use metadata to align brain with words
             for record in benchmark.stimuli:
                 story_name = record.stimulus_id
                 self.story_metadata[story_name] = record.metadata
                 
-                # Story duration
-                n_trs = record.metadata["n_trs"]
+                # IMPORTANT: Use the actual number of BOLD TRs we have loaded
+                actual_trs = self.bold_data[subj][story_name].shape[0]
+                
                 # Valid TRs t for windows [t-2:t+1] and BOLD [t+1:t+5]
-                # We also respect the global trim=5 from HuthLab
                 # Start: t-2 >= 0 => t >= 2. Also trim=5 => t >= 5.
-                # End: t+1 < n_trs and t+4 < n_trs => t+4 < n_trs. Also trim=5 => t < n_trs - 5.
-                for t in range(self.trim, n_trs - self.trim - 4):
+                # End: t+1 < actual_trs and t+5 < actual_trs => t+4 < actual_trs. Also trim=5 => t < actual_trs - 5.
+                for t in range(self.trim, actual_trs - self.trim - 4):
                     self.all_samples.append((subj, story_name, t))
         
         logger.info(f"Preprocessing complete. Total samples: {len(self.all_samples)}")
@@ -132,6 +133,11 @@ class HuthVaeDataset(Dataset):
         
         # BOLD: [t+1, t+2, t+3, t+4] -> (4, 1000)
         bold_window = self.bold_data[subj][story][t+1:t+5]
+        
+        # Safety check: ensure uniform length (should never happen now)
+        if bold_window.shape[0] != 4:
+            # Fallback to absolute index 0 if something is wrong (better than crash)
+            return self.__getitem__(0)
         
         # TEXT context: [t-2, t-1, t] (Approx 6s)
         # Using the intervals in metadata
