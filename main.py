@@ -17,8 +17,8 @@ from convminds.transforms.pca import VoxelPCA
 from convminds.transforms.timeseries import TrimTRs
 from transformers import GPT2Tokenizer, GPT2Model
 
-# Configure logging (removed datetime for clean dashboard)
-logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+# Configure logging (using INFO for clean dashboard)
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 class GPT2Embedder:
