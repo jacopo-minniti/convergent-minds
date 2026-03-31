@@ -38,7 +38,7 @@ class HuthBenchmark(BaseBenchmark):
     def __init__(
         self,
         *,
-        raw_dir: str | Path | None = None,
+        huth_dir: str | Path | None = None,
         processed_path: str | Path | None = None,
         subject: str = "S1",
         trim: int = 5,
@@ -46,12 +46,12 @@ class HuthBenchmark(BaseBenchmark):
         use_datalad: bool = True,
     ) -> None:
         # 1. Subject normalization (S1 -> UTS01)
-        self.raw_subject = subject
+        self.input_subject = subject
         id_num = int(subject[1:]) if subject.startswith("S") else int(subject.replace("UTS", "").replace("sub-", ""))
         self.subject_id = f"UTS{id_num:02d}"
         
         # 2. Paths
-        self.raw_dir = Path(raw_dir or convminds_home() / "data/huth").expanduser()
+        self.huth_dir = Path(huth_dir or convminds_home() / "data/huth").expanduser()
         self.processed_path = Path(processed_path or convminds_home() / f"data/huth_processed/huth.{self.subject_id}.pkl").expanduser()
         
         self.trim = trim
@@ -65,7 +65,7 @@ class HuthBenchmark(BaseBenchmark):
         stimuli = self._load_or_prepare_stimuli()
         
         # 5. Setup Source
-        source = HuthRecordingSource(ds_root=self.raw_dir)
+        source = HuthRecordingSource(ds_root=self.huth_dir)
         
         super().__init__(
             identifier=f"huth.{self.subject_id}",
@@ -93,41 +93,37 @@ class HuthBenchmark(BaseBenchmark):
         Follows user instructions to download only necessary subject data.
         """
         # 1. Clone if not present
-        if not self.raw_dir.exists() or not (self.raw_dir / ".datalad").exists():
-            logger.info(f"Huth dataset not found at {self.raw_dir}. Initializing DataLad clone from OpenNeuro...")
-            self.raw_dir.parent.mkdir(parents=True, exist_ok=True)
+        if not self.huth_dir.exists() or not (self.huth_dir / ".datalad").exists():
+            logger.info(f"Huth dataset not found at {self.huth_dir}. Initializing DataLad clone from OpenNeuro...")
+            self.huth_dir.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run([
-                "datalad", "clone", "https://github.com/OpenNeuroDatasets/ds003020.git", str(self.raw_dir)
+                "datalad", "clone", "https://github.com/OpenNeuroDatasets/ds003020.git", str(self.huth_dir)
             ], check=True)
 
         # 2. Get Metadata (json files are already there but symlinks)
-        # Actually OpenNeuro clones contain json files, but we should make sure respdict.json is there
-        respdict_path = self.raw_dir / "derivatives/respdict.json"
+        respdict_path = self.huth_dir / "derivatives/respdict.json"
         if not respdict_path.exists() or respdict_path.stat().st_size < 1000: # Symlinks are small
             logger.info("Materializing Huth metadata (respdict.json)...")
-            self._run_datalad(["get", "derivatives/respdict.json"], self.raw_dir)
+            self._run_datalad(["get", "derivatives/respdict.json"], self.huth_dir)
 
         # 3. Get Stimuli (TextGrids)
-        textgrids_dir = self.raw_dir / "derivatives/TextGrids"
+        textgrids_dir = self.huth_dir / "derivatives/TextGrids"
         # Check if dir is empty or contains only broken symlinks
         if not textgrids_dir.exists() or not any(f.is_file() and f.stat().st_size > 100 for f in textgrids_dir.glob("*.TextGrid")):
             logger.info("Materializing Huth stimuli (TextGrids)...")
-            self._run_datalad(["get", "derivatives/TextGrids"], self.raw_dir)
+            self._run_datalad(["get", "derivatives/TextGrids"], self.huth_dir)
 
         # 4. Get BOLD data for the specific subject
-        subj_data_dir = self.raw_dir / "derivatives/preprocessed_data" / self.subject_id
-        # The user mentioned {01} goes until {09}. The repo might have sub-UTS01 or just UTS01.
-        # User explicitly said "derivatives/preprocessed_data/UTS01"
+        subj_data_dir = self.huth_dir / "derivatives/preprocessed_data" / self.subject_id
         if not subj_data_dir.exists() or not any(f.is_file() and f.stat().st_size > 1e6 for f in subj_data_dir.glob("*.hf5")):
             logger.info(f"Materializing Huth BOLD data for subject: {self.subject_id}...")
-            # Try plain UTSXX first
             rel_path = f"derivatives/preprocessed_data/{self.subject_id}"
             try:
-                self._run_datalad(["get", rel_path], self.raw_dir)
+                self._run_datalad(["get", rel_path], self.huth_dir)
             except Exception:
                 # Try sub-UTSXX if it fails
                 logger.info(f"Retrying with sub- prefix for {self.subject_id}...")
-                self._run_datalad(["get", f"derivatives/preprocessed_data/sub-{self.subject_id}"], self.raw_dir)
+                self._run_datalad(["get", f"derivatives/preprocessed_data/sub-{self.subject_id}"], self.huth_dir)
              
         logger.info("Huth data environment ready.")
 
@@ -153,7 +149,7 @@ class HuthBenchmark(BaseBenchmark):
         Extracts story-level transcripts and TR timing.
         Returns one StimulusRecord per story.
         """
-        derivatives_dir = self.raw_dir / "derivatives"
+        derivatives_dir = self.huth_dir / "derivatives"
         stim_dir = derivatives_dir / "TextGrids"
         
         # 1. Resolve subject directory (could be UTS01 or sub-UTS01)

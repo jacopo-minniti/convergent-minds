@@ -95,7 +95,7 @@ class HuthRecordingSource(HumanRecordingSource):
         id_num = int(subject_orig[1:]) if subject_orig.startswith("S") else int(subject_orig.replace("UTS", "").replace("sub-", ""))
         subject_id = f"UTS{id_num:02d}"
         
-        # 2. Resolve Path (benchmark.raw_dir / derivatives/preprocessed_data / UTS01)
+        # 2. Resolve Path (benchmark.huth_dir / derivatives/preprocessed_data / UTS01)
         derivatives_path = self.ds_root / "derivatives"
         subject_dir = derivatives_path / "preprocessed_data" / subject_id
         if not subject_dir.exists():
