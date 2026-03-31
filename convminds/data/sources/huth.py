@@ -87,88 +87,50 @@ class HuthRecordingSource(HumanRecordingSource):
         selector: Mapping[str, Any] | None = None,
     ) -> HumanRecordingData:
         """
-        Loads fMRI responses for the stories defined in the benchmark.
+        Simplified load_recordings mirroring the successful test script.
         """
         import torch
-        # 1. Normalize Subject
         subject_orig = selector.get("subject", "S1") if selector else "S1"
         id_num = int(subject_orig[1:]) if subject_orig.startswith("S") else int(subject_orig.replace("UTS", "").replace("sub-", ""))
         subject_id = f"UTS{id_num:02d}"
         
-        # 2. Resolve Path (benchmark.huth_dir / derivatives/preprocessed_data / UTS01)
-        derivatives_path = self.ds_root / "derivatives"
-        subject_dir = derivatives_path / "preprocessed_data" / subject_id
+        subject_dir = self.ds_root / "derivatives" / "preprocessed_data" / subject_id
+        stories = [s.stimulus_id for s in benchmark.stimuli]
         
-        if not subject_dir.exists():
-             raise FileNotFoundError(f"Subject folder not found: {subject_dir}")
-            
-        stories = [s.stimulus_id for s in benchmark.stimuli] 
-        unique_stories = sorted(list(set(stories)))
-        
-        # 3. Check cache
-        config = {
-            "kind": "huth-source",
-            "subject": subject_id,
-            "stories": unique_stories,
-            "ds_root": str(self.ds_root),
-        }
-        
-        if self.use_cache:
-            cached = load_cache("datasets", config=config)
-            if cached is not None:
-                logger.info(f"Loaded cached Huth recordings for {subject_id}")
-                return HumanRecordingData(
-                    values=cached["values"],
-                    stimulus_ids=list(cached["stimulus_ids"]),
-                    feature_ids=list(cached["feature_ids"]),
-                    metadata=dict(cached["metadata"]),
-                    category=DataCategory.TOKEN_LEVEL,
-                )
-
-        # 4. Load from Disk
-        logger.info(f"Loading Huth BOLD data for {subject_id} from {subject_dir}")
         all_values = []
         all_story_ids = []
         all_rois = {}
         
-        for story in unique_stories:
+        for story in stories:
             resp_path = subject_dir / f"{story}.hf5"
-            # Robustness: Check if file exists and is not a broken symlink (size > 0)
-            if not resp_path.exists() or resp_path.stat().st_size < 1e6:
-                logger.warning(f"Response file not found or appears to be a broken symlink: {resp_path}. Make sure datalad get was successful.")
+            
+            # Simple datalad get if file is hollow or missing
+            if not resp_path.exists() or resp_path.stat().st_size < 1000:
+                logger.info(f"Materializing {story}.hf5 via datalad...")
+                rel_path = f"derivatives/preprocessed_data/{subject_id}/{story}.hf5"
+                subprocess.run(["datalad", "get", rel_path], cwd=str(self.ds_root), capture_output=True)
+                
+            try:
+                with h5py.File(resp_path, "r") as hf:
+                    data = hf["data"][:] # (TR, Voxels)
+                    all_values.append(data.astype(np.float32))
+                    all_story_ids.append(story)
+                    
+                    for key in hf.keys():
+                        if key.startswith("roi_"):
+                            all_rois[key] = torch.as_tensor(hf[key][:], dtype=torch.bool)
+            except Exception as e:
+                logger.error(f"Failed to load {resp_path}: {e}")
                 continue
-                
-            with h5py.File(resp_path, "r") as hf:
-                data = hf["data"][:] # (TR, Voxels)
-                all_values.append(data.astype(np.float32))
-                all_story_ids.append(story)
-                
-                # Extract all ROI masks
-                for key in hf.keys():
-                    if key.startswith("roi_"):
-                        mask = hf[key][:]
-                        if key not in all_rois:
-                            all_rois[key] = torch.as_tensor(mask, dtype=torch.bool)
         
         if not all_values:
-            raise FileNotFoundError(f"No valid BOLD data found for subject {subject_id} in {subject_dir}. Please run datalad get.")
+            raise FileNotFoundError(f"No valid BOLD data found for {subject_id} in {subject_dir}")
             
         feature_ids = [f"voxel-{i}" for i in range(all_values[0].shape[1])]
-        
-        recorded_data = HumanRecordingData(
+        return HumanRecordingData(
             values=all_values,
             stimulus_ids=all_story_ids,
             feature_ids=feature_ids,
-            metadata={"subject": subject_id, "stories": unique_stories, "rois": all_rois},
+            metadata={"subject": subject_id, "rois": all_rois},
             category=DataCategory.TOKEN_LEVEL,
         )
-        
-        if self.use_cache:
-            save_cache("datasets", config=config, payload={
-                "values": all_values,
-                "stimulus_ids": all_story_ids,
-                "feature_ids": feature_ids,
-                "metadata": recorded_data.metadata,
-            })
-            
-        return recorded_data

@@ -89,41 +89,31 @@ class HuthBenchmark(BaseBenchmark):
 
     def ensure_data(self):
         """
-        Uses DataLad to fetch the ds003020 dataset if it doesn't exist.
-        Follows user instructions to download only necessary subject data.
+        Simplified ensure_data following user instructions.
         """
         # 1. Clone if not present
         if not self.huth_dir.exists() or not (self.huth_dir / ".datalad").exists():
-            logger.info(f"Huth dataset not found at {self.huth_dir}. Initializing DataLad clone from OpenNeuro...")
+            logger.info(f"Huth dataset not found at {self.huth_dir}. Initializing DataLad clone...")
             self.huth_dir.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run([
                 "datalad", "clone", "https://github.com/OpenNeuroDatasets/ds003020.git", str(self.huth_dir)
             ], check=True)
 
-        # 2. Get Metadata (json files are already there but symlinks)
-        respdict_path = self.huth_dir / "derivatives/respdict.json"
-        if not respdict_path.exists() or respdict_path.stat().st_size < 1000:
-            logger.info("Materializing Huth metadata (respdict.json)...")
-            self._run_datalad(["get", "derivatives/respdict.json"], self.huth_dir)
+        # 2. Get Metadata & Stimuli metadata (TextGrids/respdict)
+        essential_paths = ["derivatives/respdict.json", "derivatives/TextGrids"]
+        for p in essential_paths:
+            full_p = self.huth_dir / p
+            if not full_p.exists() or (full_p.is_file() and full_p.stat().st_size < 1000):
+                logger.info(f"Materializing {p}...")
+                self._run_datalad(["get", p], self.huth_dir)
 
-        # 3. Get Stimuli (TextGrids)
-        textgrids_dir = self.huth_dir / "derivatives/TextGrids"
-        if not textgrids_dir.exists() or not any(f.is_file() and f.stat().st_size > 100 for f in textgrids_dir.glob("*.TextGrid")):
-            logger.info("Materializing Huth stimuli (TextGrids)...")
-            self._run_datalad(["get", "derivatives/TextGrids"], self.huth_dir)
-
-        # 4. Get BOLD data for the specific subject
+        # 3. Get BOLD data for subject if not present or hollow
         subj_dir = self.huth_dir / "derivatives" / "preprocessed_data" / self.subject_id
-        
-        # Check if files are present (size check to detect un-materialized links)
-        files_present = subj_dir.exists() and any(f.is_file() and f.stat().st_size > 1e6 for f in subj_dir.glob("*.hf5"))
-        
-        if not files_present:
-            logger.info(f"Materializing Huth BOLD data for subject: {self.subject_id}...")
-            rel_path = f"derivatives/preprocessed_data/{self.subject_id}"
-            self._run_datalad(["get", rel_path], self.huth_dir)
+        if not subj_dir.exists() or not any(f.is_file() and f.stat().st_size > 1e6 for f in subj_dir.glob("*.hf5")):
+            logger.info(f"Materializing BOLD data for {self.subject_id}...")
+            self._run_datalad(["get", f"derivatives/preprocessed_data/{self.subject_id}"], self.huth_dir)
              
-        logger.info("Huth data environment ready.")
+        logger.info("Huth data ready.")
 
 
     def _load_or_prepare_stimuli(self) -> StimulusSet:
@@ -145,98 +135,56 @@ class HuthBenchmark(BaseBenchmark):
     def prepare_processed(self) -> StimulusSet:
         """
         Extracts story-level transcripts and TR timing.
-        Returns one StimulusRecord per story.
         """
         derivatives_dir = self.huth_dir / "derivatives"
         stim_dir = derivatives_dir / "TextGrids"
         subj_dir = derivatives_dir / "preprocessed_data" / self.subject_id
-        
-        if not subj_dir.exists():
-             raise FileNotFoundError(f"Subject folder not found: {subj_dir}")
-
         respdict_path = derivatives_dir / "respdict.json"
         
-        if not respdict_path.exists():
-             raise FileNotFoundError(f"Huth metadata not found: {respdict_path}")
-             
         with open(respdict_path, "r") as f:
             respdict = json.load(f)
             
-        # Discover stories from the HDF5 files in the subject folder
+        # Discover stories that actually have BOLD files
         hf5_files = list(subj_dir.glob("*.hf5"))
-        if not hf5_files:
-             logger.warning(f"No BOLD HDF5 files found for subject {self.subject_id} in {subj_dir}")
-             
         records = []
         rows = []
         
-        # Naming normalization to handle hyphen discrepancies
         def normalize(s: str) -> str:
             return s.replace("-", "").replace("_", "").lower()
             
-        # Map TextGrids if not cached
-        if not hasattr(self, "_tg_mapping"):
-             self._tg_mapping = {normalize(p.stem): p for p in stim_dir.glob("*.TextGrid")}
-        
-        # Story TR count from respdict (also normalized)
-        if not hasattr(self, "_respdict_norm"):
-             self._respdict_norm = {normalize(k): v for k, v in respdict.items()}
+        tg_mapping = {normalize(p.stem): p for p in stim_dir.glob("*.TextGrid")}
+        respdict_norm = {normalize(k): v for k, v in respdict.items()}
 
         for hf_path in hf5_files:
             story = hf_path.stem
             norm_story = normalize(story)
             
-            tg_path = self._tg_mapping.get(norm_story)
-            if not tg_path:
-                logger.debug(f"TextGrid not found for story {story} (normalized: {norm_story})")
+            tg_path = tg_mapping.get(norm_story)
+            if not tg_path or not tg_path.exists():
                 continue
                 
-            if norm_story not in self._respdict_norm:
-                logger.warning(f"Story {story} not found in respdict.json. Guessing length from HDF5.")
+            n_trs = respdict_norm.get(norm_story)
+            if n_trs is None:
+                # Fallback to HDF5 if not in dict
                 with h5py.File(hf_path, "r") as f:
                     n_trs = f["data"].shape[0]
-            else:
-                n_trs = self._respdict_norm[norm_story]
                  
             tr_times = np.arange(n_trs) * 2.0
             
-            # Skip if broken symlink (fetch failed)
-            if not tg_path.exists():
-                 logger.warning(f"Stimulus file not found: {tg_path}")
-                 continue
-
             with open(tg_path, "r") as f:
-                content = f.read()
-                tg = TextGrid(content)
+                tg = TextGrid(f.read())
                 
             word_tier = tg.get_tier("words")
-            if not word_tier:
-                continue
+            if not word_tier: continue
             
             intervals = word_tier["intervals"]
-            metadata = {
-                "tr_times": tr_times.tolist(),
-                "word_intervals": intervals,
-                "n_trs": n_trs
-            }
-            
+            metadata = {"tr_times": tr_times.tolist(), "word_intervals": intervals, "n_trs": n_trs}
             full_text = " ".join([i["text"] for i in intervals if i["text"].strip()])
             
-            rec = StimulusRecord(
-                stimulus_id=story,
-                text=full_text,
-                topic=story,
-                metadata=metadata
-            )
+            rec = StimulusRecord(stimulus_id=story, text=full_text, topic=story, metadata=metadata)
             records.append(rec)
-            rows.append({
-                "stimulus_id": rec.stimulus_id,
-                "text": rec.text,
-                "story": story,
-                "metadata": rec.metadata
-            })
+            rows.append({"stimulus_id": story, "text": full_text, "story": story, "metadata": metadata})
             
-        # Cache the rows for faster reload
         if rows:
             self.processed_path.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(rows).to_pickle(self.processed_path)
