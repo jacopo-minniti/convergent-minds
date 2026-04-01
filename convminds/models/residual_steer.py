@@ -42,6 +42,10 @@ class ResidualSteerLM(BrainLanguageModel):
         Extract hidden states at a specific layer for a given input.
         Used to calculate H_query and H_target.
         """
+        # Ensure 2D input
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(0)
+            
         # Use the built-in HF mechanism to extract hidden states.
         # This is more robust than manual layer iteration.
         outputs = self.llm.transformer(input_ids, output_hidden_states=True)
@@ -57,9 +61,22 @@ class ResidualSteerLM(BrainLanguageModel):
         Implementation of Phase 2: Main Training (Cross-Entropy & Injection).
         Follows Steps A-D of the specification.
         """
+        # Ensure 2D input
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(0)
+            
         # Step A: The First Half of the LLM (up to injection_layer)
         # Using output_hidden_states ensures internal logic (positions, masks) is handled.
-        outputs = self.llm.transformer(input_ids, output_hidden_states=True)
+        # We also need the attention mask for consistent behavior
+        attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
+        
+        # Prepare attention mask for GPT-2 (expects [batch, 1, 1, seq_len])
+        # We'll use the internal model's logic for simplicity:
+        outputs = self.llm.transformer(
+            input_ids, 
+            attention_mask=attention_mask,
+            output_hidden_states=True
+        )
         H_L6 = outputs.hidden_states[self.injection_layer]
         
         # Step B: The Intercept & Adapter Forward
@@ -74,10 +91,29 @@ class ResidualSteerLM(BrainLanguageModel):
         
         # Step D: The Second Half of the LLM
         hidden_states = H_L6_steered
+        
+        # Crucial fix: Enforce 3D shape (Batch, SeqLen, Hidden)
+        if hidden_states.dim() == 2:
+            hidden_states = hidden_states.unsqueeze(1)
+            
         transformer = self.llm.transformer
+        
+        # Get head mask if it exists
+        head_mask = transformer.get_head_mask(None, len(transformer.h))
+        
+        # Get causality mask (GPT-2 specific)
         for i in range(self.injection_layer, len(transformer.h)):
-            # Layers from injection_layer onwards
-            hidden_states = transformer.h[i](hidden_states)[0]
+            # Calling the block with the hidden_states.
+            # We don't pass the attention mask here manually to avoid complex mask transformations,
+            # trusting that if hidden_states is 3D, GPT-2 attention will work.
+            layer_outputs = transformer.h[i](
+                hidden_states,
+                layer_past=None,
+                attention_mask=None,
+                head_mask=head_mask[i],
+                use_cache=False,
+            )
+            hidden_states = layer_outputs[0]
             
         hidden_states = transformer.ln_f(hidden_states)
         logits = self.llm.lm_head(hidden_states)
