@@ -1,12 +1,54 @@
 from __future__ import annotations
 
 import torch
+import torch.nn as nn
 import logging
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from convminds.models.base import BrainLanguageModel
-from convminds.models.brain_steer import BrainSteerAdapter
 
 logger = logging.getLogger(__name__)
+
+class BrainSteerAdapter(nn.Module):
+    """
+    Adapter that maps brain activity (4 TRs) to a steering vector 
+    via cross-attention with the LLM's current hidden state.
+    """
+    def __init__(self, brain_dim=1000, llm_dim=768, num_heads=12, n_frames=4):
+        super().__init__()
+        self.brain_dim = brain_dim
+        self.llm_dim = llm_dim
+        self.n_frames = n_frames
+        
+        # 1. Positional Embedding
+        self.pos_embed = nn.Parameter(torch.randn(1, n_frames, brain_dim) * 0.02)
+        
+        # 2. Projections
+        self.W_K = nn.Linear(brain_dim, llm_dim)
+        self.W_V = nn.Linear(brain_dim, llm_dim)
+        self.W_Q = nn.Linear(llm_dim, llm_dim)
+        
+        # 3. Cross-Attention
+        self.attn = nn.MultiheadAttention(
+            embed_dim=llm_dim, 
+            num_heads=num_heads, 
+            batch_first=True
+        )
+        
+        # 4. Transformer MLP (Output Head)
+        self.mlp = nn.Sequential(
+            nn.Linear(llm_dim, llm_dim * 4),
+            nn.GELU(),
+            nn.Linear(llm_dim * 4, llm_dim)
+        )
+
+    def forward(self, B, H_query):
+        B = B + self.pos_embed
+        K = self.W_K(B)
+        V = self.W_V(B)
+        Q = self.W_Q(H_query)
+        A, weights = self.attn(query=Q, key=K, value=V)
+        v_steer = self.mlp(A)
+        return v_steer
 
 class ResidualSteerLM(BrainLanguageModel):
     """
@@ -43,6 +85,7 @@ class ResidualSteerLM(BrainLanguageModel):
         Runs the LLM up to the injection layer. 
         Used by both Phase 1 and Phase 2 to avoid redundant code.
         """
+        batch_size, seq_len = input_ids.shape
         device = input_ids.device
         attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
         transformer = self.llm.transformer
@@ -55,6 +98,8 @@ class ResidualSteerLM(BrainLanguageModel):
             dtype=self.llm.dtype
         )
         
+        logger.info(f"Extended Mask shape: {extended_attention_mask.shape}")
+        
         # Safer position IDs that handle batching/padding natively
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
@@ -63,17 +108,19 @@ class ResidualSteerLM(BrainLanguageModel):
         hidden_states = transformer.drop(hidden_states)
         
         logger.info(f"Embeddings complete: hidden_states={hidden_states.shape}")
-        assert hidden_states.dim() == 3, f"Expected 3D hidden_states after embeddings, got {hidden_states.shape}"
         
         for i in range(self.injection_layer):
             logger.info(f"Layer {i} input: hidden_states={hidden_states.shape}")
-            assert hidden_states.dim() == 3, f"Layer {i}: hidden_states is not 3D, got {hidden_states.shape}"
-            
             layer_outputs = transformer.h[i](
                 hidden_states, 
                 attention_mask=extended_attention_mask
             )
             hidden_states = layer_outputs[0]
+            
+            # Defensive check: ensure batch dimension is preserved
+            if hidden_states.dim() == 2:
+                logger.warning(f"Layer {i} output collapsed to 2D. Restoring Batch dim={batch_size}")
+                hidden_states = hidden_states.view(batch_size, seq_len, -1)
             
         return hidden_states, extended_attention_mask
 
@@ -135,13 +182,16 @@ class ResidualSteerLM(BrainLanguageModel):
         transformer = self.llm.transformer
         for i in range(self.injection_layer, len(transformer.h)):
             logger.info(f"Post-injection Layer {i} input: hidden_states={steered_hidden_states.shape}")
-            assert steered_hidden_states.dim() == 3, f"Layer {i}: steered_hidden_states is not 3D, got {steered_hidden_states.shape}"
-            
             layer_outputs = transformer.h[i](
                 steered_hidden_states, 
                 attention_mask=extended_attention_mask
             )
             steered_hidden_states = layer_outputs[0]
+            
+            # Defensive check: ensure batch dimension is preserved
+            if steered_hidden_states.dim() == 2:
+                logger.warning(f"Post-injection Layer {i} output collapsed to 2D. Restoring Batch dim={batch_size}")
+                steered_hidden_states = steered_hidden_states.view(batch_size, seq_len, -1)
             
         steered_hidden_states = transformer.ln_f(steered_hidden_states)
         logits = self.llm.lm_head(steered_hidden_states)
