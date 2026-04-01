@@ -1,6 +1,18 @@
 from . import metrics
 from .benchmarks import Benchmark, InMemoryBenchmark
 from .subjects import HFArtificialSubject, HumanSubject
+import random
+import numpy as np
+import torch
+
+def set_seed(seed=0):
+    """Ensure reproducibility by seeding all relevant libraries."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 _LAZY_SUBMODULES = {
     "benchmarks",
@@ -39,4 +51,5 @@ __all__ = [
     "pipelines",
     "benchmarks",
     "subjects",
+    "set_seed",
 ]
