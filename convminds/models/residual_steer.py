@@ -46,7 +46,10 @@ class ResidualSteerLM(BrainLanguageModel):
         transformer = self.llm.transformer
         
         extended_attention_mask = transformer.get_extended_attention_mask(
-            attention_mask, input_ids.size(), device
+            attention_mask=attention_mask, 
+            input_shape=input_ids.size(), 
+            device=device,
+            dtype=self.llm.dtype
         )
         
         # Safer position IDs that handle batching/padding natively
