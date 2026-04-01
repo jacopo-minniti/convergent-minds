@@ -92,13 +92,13 @@ class ResidualSteerLM(BrainLanguageModel):
         
         logger.info(f"Input processing: ids={input_ids.shape}, mask={attention_mask.shape}")
         
-        extended_attention_mask = transformer.get_extended_attention_mask(
-            attention_mask, 
-            input_ids.size(),
-            dtype=self.llm.dtype
-        )
+        # Manually create the 4D broadcastable attention mask for GPT-2
+        # Shape: [batch, 1, 1, seq]
+        mask_4d = attention_mask[:, None, None, :]
+        mask_4d = mask_4d.to(dtype=self.llm.dtype)
+        mask_4d = (1.0 - mask_4d) * torch.finfo(self.llm.dtype).min
         
-        logger.info(f"Extended Mask shape: {extended_attention_mask.shape}")
+        logger.info(f"Manual 4D Mask shape: {mask_4d.shape}")
         
         # Safer position IDs that handle batching/padding natively
         position_ids = attention_mask.long().cumsum(-1) - 1
@@ -113,14 +113,18 @@ class ResidualSteerLM(BrainLanguageModel):
             logger.info(f"Layer {i} input: hidden_states={hidden_states.shape}")
             layer_outputs = transformer.h[i](
                 hidden_states, 
-                attention_mask=extended_attention_mask
+                attention_mask=mask_4d
             )
             hidden_states = layer_outputs[0]
             
-            # Defensive check: ensure batch dimension is preserved
-            if hidden_states.dim() == 2:
-                logger.warning(f"Layer {i} output collapsed to 2D. Restoring Batch dim={batch_size}")
-                hidden_states = hidden_states.view(batch_size, seq_len, -1)
+            # Robust check: if batch dimension is lost, we cannot proceed safely
+            if hidden_states.shape[0] != batch_size:
+                 logger.error(f"FATAL: Layer {i} dropped batch dimension. Expected {batch_size}, got {hidden_states.shape}")
+                 # Force restore only if total elements match exactly (e.g. if it was just squeezed)
+                 if hidden_states.numel() == batch_size * seq_len * self.llm_dim:
+                     hidden_states = hidden_states.view(batch_size, seq_len, self.llm_dim)
+                 else:
+                     raise RuntimeError(f"Layer {i} corrupted hidden_states. Expected {batch_size*seq_len*768} elements, but got {hidden_states.numel()}")
             
         return hidden_states, extended_attention_mask
 
@@ -196,14 +200,15 @@ class ResidualSteerLM(BrainLanguageModel):
             logger.info(f"Post-injection Layer {i} input: hidden_states={steered_hidden_states.shape}")
             layer_outputs = transformer.h[i](
                 steered_hidden_states, 
-                attention_mask=extended_attention_mask
+                attention_mask=mask_4d
             )
             steered_hidden_states = layer_outputs[0]
             
-            # Defensive check: ensure batch dimension is preserved
-            if steered_hidden_states.dim() == 2:
-                logger.warning(f"Post-injection Layer {i} output collapsed to 2D. Restoring Batch dim={batch_size}")
-                steered_hidden_states = steered_hidden_states.view(batch_size, seq_len, -1)
+            if steered_hidden_states.shape[0] != batch_size:
+                 if steered_hidden_states.numel() == batch_size * seq_len * self.llm_dim:
+                     steered_hidden_states = steered_hidden_states.view(batch_size, seq_len, self.llm_dim)
+                 else:
+                     raise RuntimeError(f"Post-injection Layer {i} corrupted hidden_states.")
             
         steered_hidden_states = transformer.ln_f(steered_hidden_states)
         logits = self.llm.lm_head(steered_hidden_states)
