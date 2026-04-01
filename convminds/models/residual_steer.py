@@ -46,9 +46,8 @@ class ResidualSteerLM(BrainLanguageModel):
         transformer = self.llm.transformer
         
         extended_attention_mask = transformer.get_extended_attention_mask(
-            attention_mask=attention_mask, 
-            input_shape=input_ids.size(), 
-            device=device,
+            attention_mask, 
+            input_ids.size(),
             dtype=self.llm.dtype
         )
         
