@@ -121,7 +121,8 @@ class ResidualSteerLM(BrainLanguageModel):
                 # Capture H_query from the start of the steering window 
                 # (usually the last true context token)
                 context_pos = -num_steer_tokens
-                H_query = hidden_states[:, context_pos:context_pos+1, :]
+                # Use a slice that handles the end of sequence correctly
+                H_query = hidden_states[:, context_pos : (context_pos + 1) if (context_pos + 1) < 0 else None, :]
                 
                 v_steer = self.adapters[layer_str](brain_batch, H_query)
                 v_steer_cache[layer_str] = v_steer
