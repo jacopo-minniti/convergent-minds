@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from convminds.models.base import BrainLanguageModel
 from convminds.models.brain_steer import BrainSteerAdapter
 
 class ResidualSteerLM(BrainLanguageModel):
     """
     Residual Steering LM following the updated architecture specification.
-    Supports extraction of hidden states and direct injection of steering vectors.
+    Optimized for VRAM efficiency and autograd stability.
     """
     def __init__(
         self, 
@@ -19,7 +20,6 @@ class ResidualSteerLM(BrainLanguageModel):
     ):
         super().__init__()
         
-        from transformers import AutoModelForCausalLM, AutoTokenizer
         self.llm = AutoModelForCausalLM.from_pretrained(llm_id)
         self.tokenizer = AutoTokenizer.from_pretrained(llm_id)
         if self.tokenizer.pad_token is None:
@@ -28,7 +28,6 @@ class ResidualSteerLM(BrainLanguageModel):
         self.llm_dim = self.llm.config.hidden_size
         self.injection_layer = injection_layer
         
-        # New adapter from specification
         self.adapter = BrainSteerAdapter(
             brain_dim=brain_dim, 
             llm_dim=self.llm_dim, 
@@ -37,85 +36,82 @@ class ResidualSteerLM(BrainLanguageModel):
         
         self.freeze_base_model()
 
-    def get_h_at_layer(self, input_ids: torch.Tensor, layer_idx: int) -> torch.Tensor:
+    def _get_pre_injection_state(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Extract hidden states at a specific layer for a given input.
-        Used to calculate H_query and H_target.
+        Runs the LLM up to the injection layer. 
+        Used by both Phase 1 and Phase 2 to avoid redundant code.
         """
-        # Ensure 2D input
+        device = input_ids.device
+        attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
+        transformer = self.llm.transformer
+        
+        extended_attention_mask = transformer.get_extended_attention_mask(
+            attention_mask, input_ids.size(), device
+        )
+        
+        # Safer position IDs that handle batching/padding natively
+        position_ids = attention_mask.long().cumsum(-1) - 1
+        position_ids.masked_fill_(attention_mask == 0, 1)
+        
+        hidden_states = transformer.wte(input_ids) + transformer.wpe(position_ids)
+        hidden_states = transformer.drop(hidden_states)
+        
+        for i in range(self.injection_layer):
+            layer_outputs = transformer.h[i](
+                hidden_states, 
+                attention_mask=extended_attention_mask
+            )
+            hidden_states = layer_outputs[0]
+            
+        return hidden_states, extended_attention_mask
+
+    def get_h_at_layer(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Phase 1 Extraction: Optimized to stop computing at injection_layer.
+        """
         if input_ids.dim() == 1:
             input_ids = input_ids.unsqueeze(0)
             
-        # Use the built-in HF mechanism to extract hidden states.
-        # This is more robust than manual layer iteration.
-        outputs = self.llm.transformer(input_ids, output_hidden_states=True)
-        # index 0: embeddings, index 1: after layer 0, ..., index 6: after layer 5.
-        return outputs.hidden_states[layer_idx]
+        # no_grad because Phase 1 target extraction doesn't train the LLM
+        with torch.no_grad():
+            hidden_states, _ = self._get_pre_injection_state(input_ids)
+            
+        return hidden_states
 
     def forward(self, brain_batch: torch.Tensor, input_ids: torch.Tensor, **kwargs):
         """Standard forward pass with steering injection."""
         return self.forward_steered(input_ids, brain_batch)
 
     def forward_steered(self, input_ids: torch.Tensor, brain_batch: torch.Tensor):
-        """
-        Implementation of Phase 2: Main Training (Cross-Entropy & Injection).
-        Follows Steps A-D of the specification.
-        """
-        # Ensure 2D input
+        """Phase 2: Main Training (Cross-Entropy & Injection)."""
         if input_ids.dim() == 1:
             input_ids = input_ids.unsqueeze(0)
             
-        # Step A: The First Half of the LLM (up to injection_layer)
-        # Using output_hidden_states ensures internal logic (positions, masks) is handled.
-        # We also need the attention mask for consistent behavior
-        attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
-        
-        # Prepare attention mask for GPT-2 (expects [batch, 1, 1, seq_len])
-        # We'll use the internal model's logic for simplicity:
-        outputs = self.llm.transformer(
-            input_ids, 
-            attention_mask=attention_mask,
-            output_hidden_states=True
-        )
-        H_L6 = outputs.hidden_states[self.injection_layer]
-        
-        # Step B: The Intercept & Adapter Forward
-        # Grab state of the last token
-        H_query = H_L6[:, -1:, :] 
+        # 1. First Half (Wrapped in no_grad to save 50% activation VRAM!)
+        with torch.no_grad():
+            hidden_states, extended_attention_mask = self._get_pre_injection_state(input_ids)
+            
+        # 2. Intercept & Adapter Forward
+        H_query = hidden_states[:, -1:, :]
         v_steer = self.adapter(brain_batch, H_query)
         
-        # Step C: The Injection
-        # Add steering vector to the final token
-        H_L6_steered = H_L6.clone()
-        H_L6_steered[:, -1:, :] = H_L6_steered[:, -1:, :] + v_steer 
+        # 3. Autograd-Safe Injection (Split, Mutate, Concat)
+        front_context = hidden_states[:, :-1, :]
+        last_token_steered = hidden_states[:, -1:, :] + v_steer
         
-        # Step D: The Second Half of the LLM
-        hidden_states = H_L6_steered
+        # Because v_steer requires_grad, steered_hidden_states will now automatically require_grad
+        steered_hidden_states = torch.cat([front_context, last_token_steered], dim=1)
         
-        # Crucial fix: Enforce 3D shape (Batch, SeqLen, Hidden)
-        if hidden_states.dim() == 2:
-            hidden_states = hidden_states.unsqueeze(1)
-            
+        # 4. Second Half of the LLM
         transformer = self.llm.transformer
-        
-        # Get causality mask (GPT-2 specific)
         for i in range(self.injection_layer, len(transformer.h)):
-            # Calling the block with the hidden_states.
             layer_outputs = transformer.h[i](
-                hidden_states,
-                layer_past=None,
-                attention_mask=None,
-                head_mask=None,
-                use_cache=False,
+                steered_hidden_states, 
+                attention_mask=extended_attention_mask
             )
-            hidden_states = layer_outputs[0]
+            steered_hidden_states = layer_outputs[0]
             
-        hidden_states = transformer.ln_f(hidden_states)
-        logits = self.llm.lm_head(hidden_states)
+        steered_hidden_states = transformer.ln_f(steered_hidden_states)
+        logits = self.llm.lm_head(steered_hidden_states)
         
         return logits, v_steer
-
-    def _resolve_layers(self, llm):
-        if hasattr(llm, "transformer") and hasattr(llm.transformer, "h"):
-            return llm.transformer.h
-        raise ValueError("Only GPT-2 style models are currently supported by this implementation.")
