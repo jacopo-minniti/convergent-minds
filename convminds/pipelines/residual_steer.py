@@ -31,7 +31,7 @@ class ResidualSteerPipeline(BasePipeline):
     ):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
-        self.optimizer = AdamW(self.model.adapter.parameters(), lr=lr)
+        self.optimizer = AdamW(self.model.adapters.parameters(), lr=lr)
 
     def train(
         self, 
@@ -55,28 +55,35 @@ class ResidualSteerPipeline(BasePipeline):
                 for batch in pbar:
                     B = batch["bold"].to(self.device)
                     
-                    # Extract context and target hidden states
+                    # Extract context and target hidden states for ALL layers
                     ctx_enc = self.model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
                     tgt_enc = self.model.tokenizer(batch["target"], return_tensors="pt", padding=True, truncation=True)
                     
                     ctx_ids, ctx_mask = ctx_enc.input_ids.to(self.device), ctx_enc.attention_mask.to(self.device)
                     tgt_ids, tgt_mask = tgt_enc.input_ids.to(self.device), tgt_enc.attention_mask.to(self.device)
                     
+                    # 1. Capture ALL layer hidden states at once efficiently
                     with torch.no_grad():
-                        H_query = self.model.get_h_at_layer(ctx_ids, attention_mask=ctx_mask)[:, -1:, :]
+                        ctx_out = self.model.llm(ctx_ids, attention_mask=ctx_mask, output_hidden_states=True)
+                        tgt_out = self.model.llm(tgt_ids, attention_mask=tgt_mask, output_hidden_states=True)
+                    
+                    total_mse = 0
+                    for layer in self.model.injection_layers:
+                        H_query = ctx_out.hidden_states[layer][:, -1:, :]
                         
-                        # Masked mean for target signal
-                        H_target_raw = self.model.get_h_at_layer(tgt_ids, attention_mask=tgt_mask)
+                        # Masked mean for target signal at this layer
+                        H_target_raw = tgt_out.hidden_states[layer]
                         mask_expanded = tgt_mask.unsqueeze(-1).float()
                         sum_h = torch.sum(H_target_raw * mask_expanded, dim=1, keepdim=True)
                         count = torch.sum(mask_expanded, dim=1, keepdim=True).clamp(min=1e-8)
                         H_target = sum_h / count
                         
                         delta_target = H_target - H_query
+                        v_steer = self.model.adapters[str(layer)](B, H_query)
+                        
+                        total_mse += F.mse_loss(v_steer, delta_target)
                     
-                    # Gradient Step
-                    v_steer = self.model.adapter(B, H_query)
-                    loss = F.mse_loss(v_steer, delta_target)
+                    loss = total_mse / len(self.model.injection_layers)
                     
                     self.optimizer.zero_grad()
                     loss.backward()
@@ -95,7 +102,7 @@ class ResidualSteerPipeline(BasePipeline):
             criterion = nn.CrossEntropyLoss()
             
             for epoch in range(1, phase_epochs[1] + 1):
-                self.model.adapter.train()
+                self.model.adapters.train()
                 epoch_losses = []
                 pbar = tqdm(train_loader, desc=f"Ph2 Ep {epoch}")
                 
@@ -137,7 +144,7 @@ class ResidualSteerPipeline(BasePipeline):
         Multi-baseline benchmark comparison using both token-level accuracy 
         and sequence-level metrics (BLEU, ROUGE, WER).
         """
-        self.model.adapter.eval()
+        self.model.adapters.eval()
         
         # Accuracy Counters
         correct_steered = total = 0
@@ -223,7 +230,7 @@ class ResidualSteerPipeline(BasePipeline):
 
     def predict(self, input_ids: torch.Tensor, brain_batch: torch.Tensor, **kwargs):
         """Standard steering inference."""
-        self.model.adapter.eval()
+        self.model.adapters.eval()
         with torch.no_grad():
             logits, _ = self.model.forward_steered(input_ids, brain_batch, **kwargs)
         return logits

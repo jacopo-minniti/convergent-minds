@@ -25,13 +25,14 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--subject", type=str, default="S1", help="Subject ID (e.g., S1, S2)")
     parser.add_argument("--llm", type=str, default="gpt2", help="Base LLM ID from HuggingFace")
-    parser.add_argument("--layer", type=int, default=6, help="Injection layer (0-indexed)")
+    parser.add_argument("--layers", type=str, default="6", help="Comma-separated injection layers (e.g., 2,6,10)")
     args = parser.parse_args()
     
     # 0. Global Setup
     cm.set_seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     phase_epochs = [int(e) for e in args.epochs.split(",")]
+    injection_layers = [int(l) for l in args.layers.split(",")]
     
     # 1. Dataset & DataLoaders
     logger.info(f"Initializing Huth Alignment Dataset for Subject {args.subject}...")
@@ -42,8 +43,8 @@ def main():
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
     
     # 2. Model Initialization
-    logger.info(f"Initializing ResidualSteerLM ({args.llm})...")
-    model = ResidualSteerLM(llm_id=args.llm, injection_layer=args.layer)
+    logger.info(f"Initializing ResidualSteerLM ({args.llm}) with layers {injection_layers}...")
+    model = ResidualSteerLM(llm_id=args.llm, injection_layers=injection_layers)
     
     # 3. Pipeline Execution
     pipeline = ResidualSteerPipeline(model=model, lr=args.lr, device=device)
@@ -59,10 +60,11 @@ def main():
     # 4. Save Artifacts
     model_dir = cm.cache.ensure_cache_dir("models")
     epochs_str = args.epochs.replace(",", "-")
-    save_name = f"steer_{args.llm}_{args.subject}_L{args.layer}_ep{epochs_str}.pt"
+    layers_str = args.layers.replace(",", "-")
+    save_name = f"steer_{args.llm}_{args.subject}_L{layers_str}_ep{epochs_str}.pt"
     save_path = model_dir / save_name
     
-    torch.save(model.adapter.state_dict(), save_path)
+    torch.save(model.adapters.state_dict(), save_path)
     logger.info(f"Steering Adapter weights saved to {save_path}")
 
 if __name__ == "__main__":
