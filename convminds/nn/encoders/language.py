@@ -34,14 +34,12 @@ class GPT2Embedder:
             num_target_tokens = len(target_ids)
             
             if num_target_tokens > 0:
-                # Take the last N tokens (the target)
-                target_hidden = hidden_states[:, -num_target_tokens:, :]
-                mean_target = target_hidden.mean(dim=1)
+                # Causal transformers summarize the sequence effectively in the final token
+                final_target_hidden = hidden_states[:, -1:, :]
+                all_embeddings.append(final_target_hidden.squeeze(1))
             else:
                 # If target is empty, use the last state of the context
-                mean_target = hidden_states[:, -1:, :]
-                
-            all_embeddings.append(mean_target.squeeze(1))
+                all_embeddings.append(hidden_states[:, -1:, :].squeeze(1))
             
         return torch.cat(all_embeddings, dim=0)
 

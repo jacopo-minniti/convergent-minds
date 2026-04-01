@@ -2,6 +2,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class ResidualBlock(nn.Module):
+    """Simple Residual block for deep feature alignment."""
+    def __init__(self, dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, dim * 2),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(dim * 2, dim)
+        )
+
+    def forward(self, x):
+        return x + self.net(x)
+
 class BrainEncoder(nn.Module):
     """
     Base Encoder for Brain-to-Latent mapping.
@@ -77,6 +92,8 @@ class BrainLanguageAdapter(nn.Module):
             
         self.head = nn.Sequential(
             nn.LayerNorm(hidden_dim),
+            ResidualBlock(hidden_dim),
+            ResidualBlock(hidden_dim),
             nn.Linear(hidden_dim, llm_dim)
         )
 

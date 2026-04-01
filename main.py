@@ -19,6 +19,7 @@ from convminds.nn.metrics import calculate_nlp_metrics, identification_accuracy
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logging.getLogger("absl").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
 def run_eval(model, loader, embedder, device):
