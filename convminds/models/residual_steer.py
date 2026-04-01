@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
+import logging
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from convminds.models.base import BrainLanguageModel
 from convminds.models.brain_steer import BrainSteerAdapter
+
+logger = logging.getLogger(__name__)
 
 class ResidualSteerLM(BrainLanguageModel):
     """
@@ -71,8 +73,16 @@ class ResidualSteerLM(BrainLanguageModel):
         """
         Phase 1 Extraction: Optimized to stop computing at injection_layer.
         """
-        if input_ids.dim() == 1:
+        # Robustly force input_ids to be 2D [batch_size, sequence_length]
+        if input_ids.dim() == 0:
+            logger.warning(f"Forcing 0D input_ids to 2D (1, 1). Shape: {input_ids.shape}")
+            input_ids = input_ids.view(1, 1)
+        elif input_ids.dim() == 1:
+            logger.warning(f"Forcing 1D input_ids to 2D (1, seq). Shape: {input_ids.shape}")
             input_ids = input_ids.unsqueeze(0)
+        elif input_ids.dim() > 2:
+            logger.warning(f"Flattening >2D input_ids to 2D (collapsed_batches, seq). Shape: {input_ids.shape}")
+            input_ids = input_ids.view(-1, input_ids.size(-1))
             
         # no_grad because Phase 1 target extraction doesn't train the LLM
         with torch.no_grad():
@@ -86,8 +96,16 @@ class ResidualSteerLM(BrainLanguageModel):
 
     def forward_steered(self, input_ids: torch.Tensor, brain_batch: torch.Tensor):
         """Phase 2: Main Training (Cross-Entropy & Injection)."""
-        if input_ids.dim() == 1:
+        # Robustly force input_ids to be 2D
+        if input_ids.dim() == 0:
+            logger.warning(f"Forcing 0D input_ids to 2D (1, 1) in forward_steered. Shape: {input_ids.shape}")
+            input_ids = input_ids.view(1, 1)
+        elif input_ids.dim() == 1:
+            logger.warning(f"Forcing 1D input_ids to 2D (1, seq) in forward_steered. Shape: {input_ids.shape}")
             input_ids = input_ids.unsqueeze(0)
+        elif input_ids.dim() > 2:
+            logger.warning(f"Flattening >2D input_ids in forward_steered. Shape: {input_ids.shape}")
+            input_ids = input_ids.view(-1, input_ids.size(-1))
             
         # 1. First Half (Wrapped in no_grad to save 50% activation VRAM!)
         with torch.no_grad():

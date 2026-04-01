@@ -56,6 +56,12 @@ def main():
                 targets = batch["target"]
                 
                 # Tokenize
+                if isinstance(contexts, str): 
+                    logger.warning(f"Forcing string context to list: '{contexts[:20]}...'")
+                    contexts = [contexts]
+                if isinstance(targets, str): 
+                    logger.warning(f"Forcing string target to list: '{targets[:20]}...'")
+                    targets = [targets]
                 ctx_ids = model.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
                 tgt_ids = model.tokenizer(targets, return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
                 
@@ -111,6 +117,9 @@ def main():
                 
                 # Let's tokenize context and get the ID of the first target token
                 # This ensures we are predicting the next word correctly.
+                if isinstance(contexts, str): 
+                    logger.warning(f"Forcing string context to list in Ph2: '{contexts[:20]}...'")
+                    contexts = [contexts]
                 input_ids = model.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
                 
                 # Get the true next token ID
@@ -145,6 +154,13 @@ def main():
             B = batch["bold"].to(device)
             contexts = batch["context"]
             targets = batch["target"]
+            
+            if isinstance(contexts, str): 
+                logger.warning(f"Forcing string context to list in Eval: '{contexts[:20]}...'")
+                contexts = [contexts]
+            if isinstance(targets, str): 
+                logger.warning(f"Forcing string target to list in Eval: '{targets[:20]}...'")
+                targets = [targets]
             
             input_ids = model.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
             target_tokens = [model.tokenizer.encode(t)[0] if len(t) > 0 else model.tokenizer.eos_token_id for t in targets]
