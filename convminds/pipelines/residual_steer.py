@@ -48,7 +48,7 @@ class ResidualSteerPipeline(BasePipeline):
         if phase_epochs[0] > 0:
             logger.info(f"Starting Phase 1: MSE Warmup ({phase_epochs[0]} epochs)")
             for epoch in range(1, phase_epochs[0] + 1):
-                self.model.adapter.train()
+                self.model.adapters.train()
                 epoch_losses = []
                 pbar = tqdm(train_loader, desc=f"Ph1 Ep {epoch}")
                 
