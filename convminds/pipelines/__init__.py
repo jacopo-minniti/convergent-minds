@@ -1,4 +1,4 @@
-from .mindllm import MindLLM
+from .base import BasePipeline
 from .residual_steer import ResidualSteerPipeline
 
-__all__ = ["MindLLM", "ResidualSteerPipeline"]
+__all__ = ["BasePipeline", "ResidualSteerPipeline"]
