@@ -66,6 +66,9 @@ def main():
                 epoch_losses.append(loss.item())
                 pbar.set_postfix({"mse": f"{loss.item():.4f}"})
 
+            avg_loss = np.mean(epoch_losses)
+            logger.info(f"Phase 1 | Epoch {epoch} Completed | Average MSE Loss: {avg_loss:.6f}")
+
     # --- PHASE 2 ---
     if len(phase_epochs) > 1 and phase_epochs[1] > 0:
         logger.info(f"Starting Phase 2: CE Injection ({phase_epochs[1]} epochs)")
@@ -94,12 +97,15 @@ def main():
                 epoch_losses.append(loss.item())
                 pbar.set_postfix({"ce_loss": f"{loss.item():.4f}"})
 
+            avg_loss = np.mean(epoch_losses)
+            logger.info(f"Phase 2 | Epoch {epoch} Completed | Average CE Loss: {avg_loss:.6f}")
+
     # --- EVALUATION ---
     logger.info("Evaluation on test set...")
     model.adapter.eval()
     with torch.no_grad():
         correct = total = 0
-        for batch in test_loader:
+        for batch in tqdm(test_loader, desc="Evaluation"):
             B = batch["bold"].to(device)
             input_ids = model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
             target_tokens = [model.tokenizer.encode(t)[0] if len(t) > 0 else model.tokenizer.eos_token_id for t in batch["target"]]
