@@ -61,12 +61,12 @@ def main():
                 
                 with torch.no_grad():
                     # Query Extraction (last token of context)
-                    H_query_full = model.get_h_at_layer(ctx_ids, model.injection_layer)
+                    H_query_full = model.get_h_at_layer(ctx_ids)
                     H_query = H_query_full[:, -1:, :] # [Batch, 1, 768]
                     
                     # Target Extraction (average of target words)
                     # NOTE: We pass target words alone (perceived continuation) as per spec
-                    H_target_full = model.get_h_at_layer(tgt_ids, model.injection_layer)
+                    H_target_full = model.get_h_at_layer(tgt_ids)
                     # Simple average over sequence length for the target words
                     H_target = H_target_full.mean(dim=1, keepdim=True) # [Batch, 1, 768]
                     
