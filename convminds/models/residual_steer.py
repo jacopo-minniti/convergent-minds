@@ -47,6 +47,8 @@ class ResidualSteerLM(BrainLanguageModel):
         attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
         transformer = self.llm.transformer
         
+        logger.info(f"Input processing: ids={input_ids.shape}, mask={attention_mask.shape}")
+        
         extended_attention_mask = transformer.get_extended_attention_mask(
             attention_mask, 
             input_ids.size(),
@@ -60,7 +62,13 @@ class ResidualSteerLM(BrainLanguageModel):
         hidden_states = transformer.wte(input_ids) + transformer.wpe(position_ids)
         hidden_states = transformer.drop(hidden_states)
         
+        logger.info(f"Embeddings complete: hidden_states={hidden_states.shape}")
+        assert hidden_states.dim() == 3, f"Expected 3D hidden_states after embeddings, got {hidden_states.shape}"
+        
         for i in range(self.injection_layer):
+            logger.info(f"Layer {i} input: hidden_states={hidden_states.shape}")
+            assert hidden_states.dim() == 3, f"Layer {i}: hidden_states is not 3D, got {hidden_states.shape}"
+            
             layer_outputs = transformer.h[i](
                 hidden_states, 
                 attention_mask=extended_attention_mask
@@ -73,6 +81,7 @@ class ResidualSteerLM(BrainLanguageModel):
         """
         Phase 1 Extraction: Optimized to stop computing at injection_layer.
         """
+        logger.info(f"get_h_at_layer input_ids: {input_ids.shape}, dtype: {input_ids.dtype}")
         # Robustly force input_ids to be 2D [batch_size, sequence_length]
         if input_ids.dim() == 0:
             logger.warning(f"Forcing 0D input_ids to 2D (1, 1). Shape: {input_ids.shape}")
@@ -125,6 +134,9 @@ class ResidualSteerLM(BrainLanguageModel):
         # 4. Second Half of the LLM
         transformer = self.llm.transformer
         for i in range(self.injection_layer, len(transformer.h)):
+            logger.info(f"Post-injection Layer {i} input: hidden_states={steered_hidden_states.shape}")
+            assert steered_hidden_states.dim() == 3, f"Layer {i}: steered_hidden_states is not 3D, got {steered_hidden_states.shape}"
+            
             layer_outputs = transformer.h[i](
                 steered_hidden_states, 
                 attention_mask=extended_attention_mask
