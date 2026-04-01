@@ -129,6 +129,12 @@ class ResidualSteerLM(BrainLanguageModel):
         Phase 1 Extraction: Optimized to stop computing at injection_layer.
         """
         logger.info(f"get_h_at_layer input_ids: {input_ids.shape}, dtype: {input_ids.dtype}")
+        
+        # Critical Check: Are we accidentally passing floats?
+        if torch.is_floating_point(input_ids):
+             logger.error(f"CRITICAL: get_h_at_layer received floating point input! Shape: {input_ids.shape}. Usually means you are passing embeddings instead of token IDs.")
+             raise TypeError(f"get_h_at_layer expects integer token IDs, got {input_ids.dtype}")
+        
         # Robustly force input_ids to be 2D [batch_size, sequence_length]
         if input_ids.dim() == 0:
             logger.warning(f"Forcing 0D input_ids to 2D (1, 1). Shape: {input_ids.shape}")
@@ -152,6 +158,12 @@ class ResidualSteerLM(BrainLanguageModel):
 
     def forward_steered(self, input_ids: torch.Tensor, brain_batch: torch.Tensor):
         """Phase 2: Main Training (Cross-Entropy & Injection)."""
+        logger.info(f"forward_steered input_ids: {input_ids.shape}, dtype: {input_ids.dtype}")
+        
+        if torch.is_floating_point(input_ids):
+             logger.error(f"CRITICAL: forward_steered received floats! Shape: {input_ids.shape}")
+             raise TypeError(f"forward_steered expects integer token IDs, got {input_ids.dtype}")
+
         # Robustly force input_ids to be 2D
         if input_ids.dim() == 0:
             logger.warning(f"Forcing 0D input_ids to 2D (1, 1) in forward_steered. Shape: {input_ids.shape}")

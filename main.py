@@ -65,6 +65,8 @@ def main():
                 ctx_ids = model.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
                 tgt_ids = model.tokenizer(targets, return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
                 
+                logger.info(f"Phase 1 Tokenization: ctx_ids={ctx_ids.shape} ({ctx_ids.dtype}), tgt_ids={tgt_ids.shape} ({tgt_ids.dtype})")
+                
                 with torch.no_grad():
                     # Query Extraction (last token of context)
                     H_query_full = model.get_h_at_layer(ctx_ids)
