@@ -79,8 +79,9 @@ class ResidualSteerLM(BrainLanguageModel):
         v_steer_cache = []
 
         def steering_hook(module, inputs, output):
-            # output is a tuple for GPT2Block: (hidden_states, present_key_value, ...)
-            hidden_states = output[0]
+            # 0. Robust check: is it a tuple or a raw tensor?
+            is_tuple = isinstance(output, tuple)
+            hidden_states = output[0] if is_tuple else output
             
             # 1. Extract Query
             H_query = hidden_states[:, -1:, :]
@@ -94,8 +95,11 @@ class ResidualSteerLM(BrainLanguageModel):
             last_token_steered = hidden_states[:, -1:, :] + v_steer
             steered_hidden_states = torch.cat([front_context, last_token_steered], dim=1)
             
-            # 4. Return modified tuple back to the LLM
-            return (steered_hidden_states,) + output[1:]
+            # 4. Return modified state back to the LLM in the exact format it expects
+            if is_tuple:
+                return (steered_hidden_states,) + output[1:]
+            else:
+                return steered_hidden_states
 
         # Register hook on the layer BEFORE the injection point (0-indexed)
         target_layer = self.llm.transformer.h[self.injection_layer - 1]
