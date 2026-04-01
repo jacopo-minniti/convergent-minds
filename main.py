@@ -35,6 +35,7 @@ def main():
     
     logger.info("Initializing ResidualSteerLM (GPT-2 Small)...")
     model = ResidualSteerLM(llm_id="gpt2", injection_layer=6).to(device)
+    model.tokenizer.padding_side = "left" # Ensure [:, -1, :] points to the last context token
     optimizer = AdamW(model.adapter.parameters(), lr=args.lr)
     
     # --- PHASE 1 ---
@@ -48,12 +49,22 @@ def main():
                 B = batch["bold"].to(device)
                 
                 # Tokenizer natively handles tuples of strings from DataLoader
-                ctx_ids = model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
-                tgt_ids = model.tokenizer(batch["target"], return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
+                ctx_enc = model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+                tgt_enc = model.tokenizer(batch["target"], return_tensors="pt", padding=True, truncation=True)
+                
+                ctx_ids, ctx_mask = ctx_enc.input_ids.to(device), ctx_enc.attention_mask.to(device)
+                tgt_ids, tgt_mask = tgt_enc.input_ids.to(device), tgt_enc.attention_mask.to(device)
                 
                 with torch.no_grad():
-                    H_query = model.get_h_at_layer(ctx_ids)[:, -1:, :]
-                    H_target = model.get_h_at_layer(tgt_ids).mean(dim=1, keepdim=True)
+                    H_query = model.get_h_at_layer(ctx_ids, attention_mask=ctx_mask)[:, -1:, :]
+                    
+                    # Masked mean for target signal
+                    H_target_raw = model.get_h_at_layer(tgt_ids, attention_mask=tgt_mask)
+                    mask_expanded = tgt_mask.unsqueeze(-1).float()
+                    sum_h = torch.sum(H_target_raw * mask_expanded, dim=1, keepdim=True)
+                    count = torch.sum(mask_expanded, dim=1, keepdim=True).clamp(min=1e-8)
+                    H_target = sum_h / count
+                    
                     delta_target = H_target - H_query
                 
                 v_steer = model.adapter(B, H_query)
@@ -80,12 +91,14 @@ def main():
             pbar = tqdm(train_loader, desc=f"Ph2 Ep {epoch}")
             for batch in pbar:
                 B = batch["bold"].to(device)
-                input_ids = model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
+                ctx_enc = model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+                input_ids, attention_mask = ctx_enc.input_ids.to(device), ctx_enc.attention_mask.to(device)
                 
-                target_tokens = [model.tokenizer.encode(t)[0] if len(t) > 0 else model.tokenizer.eos_token_id for t in batch["target"]]
+                # Encode target with space prefix to align with expected next-token distribution
+                target_tokens = [model.tokenizer.encode(" " + t)[0] if len(t) > 0 else model.tokenizer.eos_token_id for t in batch["target"]]
                 target_label = torch.tensor(target_tokens, device=device)
                 
-                logits, _ = model.forward_steered(input_ids, B)
+                logits, _ = model.forward_steered(input_ids, B, attention_mask=attention_mask)
                 next_token_logits = logits[:, -1, :]
                 
                 loss = criterion(next_token_logits, target_label)
@@ -107,11 +120,13 @@ def main():
         correct = total = 0
         for batch in tqdm(test_loader, desc="Evaluation"):
             B = batch["bold"].to(device)
-            input_ids = model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True).input_ids.to(device)
-            target_tokens = [model.tokenizer.encode(t)[0] if len(t) > 0 else model.tokenizer.eos_token_id for t in batch["target"]]
+            ctx_enc = model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+            input_ids, attention_mask = ctx_enc.input_ids.to(device), ctx_enc.attention_mask.to(device)
+            
+            target_tokens = [model.tokenizer.encode(" " + t)[0] if len(t) > 0 else model.tokenizer.eos_token_id for t in batch["target"]]
             target_label = torch.tensor(target_tokens, device=device)
             
-            logits, _ = model.forward_steered(input_ids, B)
+            logits, _ = model.forward_steered(input_ids, B, attention_mask=attention_mask)
             preds = torch.argmax(logits[:, -1, :], dim=-1)
             
             correct += (preds == target_label).sum().item()

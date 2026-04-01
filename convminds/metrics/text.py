@@ -58,6 +58,3 @@ def _sentence_bleu(prediction: str, reference: str, ngram: int) -> float:
 
 def _ngrams(tokens: List[str], n: int) -> List[tuple]:
     return [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
-
-def BERTScore(predictions, references) -> float:
-    raise NotImplementedError("BERTScore requires an external dependency; provide your own evaluator.")

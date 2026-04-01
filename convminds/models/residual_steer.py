@@ -61,12 +61,12 @@ class ResidualSteerLM(BrainLanguageModel):
         
         self.freeze_base_model() # This tells Autograd to NOT store activations for the base LLM
 
-    def get_h_at_layer(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def get_h_at_layer(self, input_ids: torch.Tensor, **kwargs) -> torch.Tensor:
         """
         Phase 1 Extraction: Uses HF's native output_hidden_states to avoid manual loops.
         """
         with torch.no_grad():
-            outputs = self.llm(input_ids=input_ids, output_hidden_states=True)
+            outputs = self.llm(input_ids=input_ids, output_hidden_states=True, **kwargs)
             # hidden_states is a tuple: (embeddings, layer_0, layer_1, ...)
             # Indexing with self.injection_layer gets the exact output state we need.
             return outputs.hidden_states[self.injection_layer]
@@ -74,7 +74,7 @@ class ResidualSteerLM(BrainLanguageModel):
     def forward(self, brain_batch: torch.Tensor, input_ids: torch.Tensor, **kwargs):
         return self.forward_steered(input_ids, brain_batch)
 
-    def forward_steered(self, input_ids: torch.Tensor, brain_batch: torch.Tensor):
+    def forward_steered(self, input_ids: torch.Tensor, brain_batch: torch.Tensor, **kwargs):
         """Phase 2: Main Training using PyTorch Forward Hooks."""
         v_steer_cache = []
 
@@ -107,8 +107,8 @@ class ResidualSteerLM(BrainLanguageModel):
         
         try:
             # The base model is frozen, so PyTorch only tracks gradients for the hook + adapter
-            outputs = self.llm(input_ids=input_ids)
+            outputs = self.llm(input_ids=input_ids, **kwargs)
         finally:
             handle.remove() # Always clean up the hook
             
-        return outputs.logits, v_steer_cache[0]
+        return outputs.logits, v_steer_cache[0] if v_steer_cache else None
