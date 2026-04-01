@@ -42,24 +42,11 @@ class ResidualSteerLM(BrainLanguageModel):
         Extract hidden states at a specific layer for a given input.
         Used to calculate H_query and H_target.
         """
-        # GPT-2 specific implementation
-        transformer = self.llm.transformer
-        hidden_states = transformer.wte(input_ids)
-        
-        # Add positional embeddings if available
-        if hasattr(transformer, "wpe"):
-            seq_length = input_ids.size(1)
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
-            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-            hidden_states = hidden_states + transformer.wpe(position_ids)
-            
-        hidden_states = transformer.drop(hidden_states)
-        
-        # Pass through layers up to layer_idx
-        for i in range(layer_idx):
-            hidden_states = transformer.h[i](hidden_states)[0]
-            
-        return hidden_states
+        # Use the built-in HF mechanism to extract hidden states.
+        # This is more robust than manual layer iteration.
+        outputs = self.llm.transformer(input_ids, output_hidden_states=True)
+        # index 0: embeddings, index 1: after layer 0, ..., index 6: after layer 5.
+        return outputs.hidden_states[layer_idx]
 
     def forward(self, brain_batch: torch.Tensor, input_ids: torch.Tensor, **kwargs):
         """Standard forward pass with steering injection."""
@@ -70,9 +57,10 @@ class ResidualSteerLM(BrainLanguageModel):
         Implementation of Phase 2: Main Training (Cross-Entropy & Injection).
         Follows Steps A-D of the specification.
         """
-        # Step A: The First Half of the LLM
-        # Layers 0 through 5 (if injection_layer=6)
-        H_L6 = self.get_h_at_layer(input_ids, self.injection_layer)
+        # Step A: The First Half of the LLM (up to injection_layer)
+        # Using output_hidden_states ensures internal logic (positions, masks) is handled.
+        outputs = self.llm.transformer(input_ids, output_hidden_states=True)
+        H_L6 = outputs.hidden_states[self.injection_layer]
         
         # Step B: The Intercept & Adapter Forward
         # Grab state of the last token
@@ -88,6 +76,7 @@ class ResidualSteerLM(BrainLanguageModel):
         hidden_states = H_L6_steered
         transformer = self.llm.transformer
         for i in range(self.injection_layer, len(transformer.h)):
+            # Layers from injection_layer onwards
             hidden_states = transformer.h[i](hidden_states)[0]
             
         hidden_states = transformer.ln_f(hidden_states)
