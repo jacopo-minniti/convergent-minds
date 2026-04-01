@@ -24,6 +24,7 @@ _LAZY_SUBMODULES = {
     "trainers",
     "objectives",
     "pipelines",
+    "cache",
 }
 
 
@@ -51,5 +52,6 @@ __all__ = [
     "pipelines",
     "benchmarks",
     "subjects",
+    "cache",
     "set_seed",
 ]

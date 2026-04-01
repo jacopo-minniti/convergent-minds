@@ -57,7 +57,11 @@ def main():
     results = pipeline.evaluate(test_loader, samples_to_show=2)
     
     # 4. Save Artifacts
-    save_path = f"brain_steer_{args.llm}_{args.subject}_{args.layer}.pt"
+    model_dir = cm.cache.ensure_cache_dir("models")
+    epochs_str = args.epochs.replace(",", "-")
+    save_name = f"steer_{args.llm}_{args.subject}_L{args.layer}_ep{epochs_str}.pt"
+    save_path = model_dir / save_name
+    
     torch.save(model.adapter.state_dict(), save_path)
     logger.info(f"Steering Adapter weights saved to {save_path}")
 
