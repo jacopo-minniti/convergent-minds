@@ -53,7 +53,7 @@ class BrainSteerAdapter(nn.Module):
 
 class ResidualSteerLM(BrainLanguageModel):
     """
-    Residual Steering LM with multi-layer injection and dropout.
+    Residual Steering LM with support for multi-layer and multi-token injection.
     """
     def __init__(
         self, 
@@ -95,7 +95,22 @@ class ResidualSteerLM(BrainLanguageModel):
     def forward(self, brain_batch: torch.Tensor, input_ids: torch.Tensor, **kwargs):
         return self.forward_steered(input_ids, brain_batch, **kwargs)
 
-    def forward_steered(self, input_ids: torch.Tensor, brain_batch: torch.Tensor, **kwargs):
+    def forward_steered(
+        self, 
+        input_ids: torch.Tensor, 
+        brain_batch: torch.Tensor, 
+        num_steer_tokens: int = 1,
+        **kwargs
+    ):
+        """
+        Execute forward pass with multi-layer residual injection.
+        
+        Args:
+            input_ids: Input tokens.
+            brain_batch: Brain activity (B, 4, 1000).
+            num_steer_tokens: Number of trailing tokens to apply steering to. 
+                              Default 1 (last token of context).
+        """
         v_steer_cache = {}
 
         def get_steering_hook(layer_str):
@@ -103,13 +118,19 @@ class ResidualSteerLM(BrainLanguageModel):
                 is_tuple = isinstance(output, tuple)
                 hidden_states = output[0] if is_tuple else output
                 
-                H_query = hidden_states[:, -1:, :]
+                # Capture H_query from the start of the steering window 
+                # (usually the last true context token)
+                context_pos = -num_steer_tokens
+                H_query = hidden_states[:, context_pos:context_pos+1, :]
+                
                 v_steer = self.adapters[layer_str](brain_batch, H_query)
                 v_steer_cache[layer_str] = v_steer
                 
-                front_context = hidden_states[:, :-1, :]
-                last_token_steered = hidden_states[:, -1:, :] + v_steer
-                steered_hidden_states = torch.cat([front_context, last_token_steered], dim=1)
+                # Apply steer to the entire N trailing positions (teacher forcing seq)
+                front_ids = hidden_states[:, :context_pos, :]
+                steered_chunk = hidden_states[:, context_pos:, :] + v_steer
+                
+                steered_hidden_states = torch.cat([front_ids, steered_chunk], dim=1)
                 
                 if is_tuple:
                     return (steered_hidden_states,) + output[1:]
@@ -149,6 +170,8 @@ class ResidualSteerLM(BrainLanguageModel):
                 hidden_states = output[0] if is_tuple else output
                 v_steer = v_steers[layer_str]
                 
+                # During generation, we always steer the full available length 
+                # (which is just the new token being predicted)
                 front_context = hidden_states[:, :-1, :]
                 last_token_steered = hidden_states[:, -1:, :] + v_steer
                 steered_hidden_states = torch.cat([front_context, last_token_steered], dim=1)
