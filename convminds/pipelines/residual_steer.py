@@ -1,135 +1,229 @@
 from __future__ import annotations
 
-from typing import Any, Callable
-
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torch.optim import AdamW
+from tqdm import tqdm
+import numpy as np
+import logging
 
-import convminds as cm
-from convminds.data import BrainDataModule
+from convminds.pipelines.base import BasePipeline
 from convminds.models.residual_steer import ResidualSteerLM
-from convminds.subjects import HFArtificialSubject, HumanSubject
+from convminds.metrics.text import calculate_text_report
 
+logger = logging.getLogger(__name__)
 
-class _BoundPenalizedLoss:
+class ResidualSteerPipeline(BasePipeline):
     """
-    Helper loss function that attaches to the model's computed penalty dynamically.
-    """
-    def __init__(self, model: ResidualSteerLM, lambda_weight: float = 1.0):
-        self.model = model
-        self.loss_fn = cm.objectives.PenalizedCrossEntropy(lambda_weight=lambda_weight)
-        
-    def __call__(self, outputs, labels):
-        penalty = self.model.get_penalty()
-        return self.loss_fn(outputs, labels, penalty)
-
-
-class ResidualSteerPipeline:
-    """
-    End-to-end replication pipeline for the ResidualSteerLM.
-    Two-stage training: MSE warm-up on the encoder, then end-to-end generation training
-    with the localized injection norm penalty.
+    Standardized pipeline for Brain-to-LLM steering.
+    Encapsulates the two-phase alignment approach:
+    1. Phase 1: Global Semantic Alignment (MSE Warmup)
+    2. Phase 2: Localized Generative Alignment (CE Injection)
     """
 
     def __init__(
         self,
-        *,
-        benchmark=None,
-        subject_id: int | str = 1,
-        llm_id: str = "meta-llama/Llama-2-7b-hf",
-        batch_size: int = 16,
-        tokenizer: Any | None = None,
-        injection_layer: int = 16,
-        lambda_weight: float = 1.0,
+        model: ResidualSteerLM,
+        lr: float = 1e-4,
+        device: torch.device | None = None,
     ):
-        if benchmark is None:
-            raise ValueError("ResidualSteerPipeline requires an explicit benchmark instance.")
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = model.to(self.device)
+        self.optimizer = AdamW(self.model.adapter.parameters(), lr=lr)
 
-        self.subject_id = subject_id
-        self.llm_id = llm_id
-        self.tokenizer = tokenizer
-
-        self.human = HumanSubject(subject_ids=[str(subject_id)])
-        self.oracle = HFArtificialSubject(llm_id, layers=[-1])
-
-        # Phase 1: Structural Setup (incorporates Windowing and Dimensionality Reduction safely)
-        self.datamodule = BrainDataModule(
-            benchmark=benchmark,
-            human_subject=self.human,
-            artificial_subject=self.oracle,
-            stateless_transforms=[cm.transforms.HRFWindow(t=4)],
-            stateful_transforms=[cm.transforms.PCA(n_components=1000)],
-            batch_size=batch_size,
-            text_transform=self._build_text_transform(tokenizer) if tokenizer is not None else None,
-        )
-
-        self.model = ResidualSteerLM(
-            llm_id=llm_id, 
-            encoder_in_dim=1000, 
-            injection_layer=injection_layer, 
-            num_frames=4
-        )
-        self.lambda_weight = lambda_weight
-
-    def train(self, *, align_epochs: int = 5, gen_epochs: int = 10) -> None:
-        self.datamodule.setup()
-        train_loader = self.datamodule.train_dataloader()
-
-        # Phase 1 Training: MSE "Warm-Up" on the Brain Encoder
-        align_trainer = cm.trainers.GradientTrainer(
-            model=self.model.encoder,
-            loss_fn=torch.nn.MSELoss(),
-            lr=1e-3,
-        )
-        align_trainer.fit(train_loader, target_key="target_latents", epochs=align_epochs)
-
-        if self.tokenizer is None:
-            raise ValueError("Generative tuning requires a tokenizer to produce text_input_ids.")
-
-        # Phase 3 Training: End-to-end generation with Norm Penalty
-        bound_loss = _BoundPenalizedLoss(self.model, lambda_weight=self.lambda_weight)
+    def train(
+        self, 
+        train_loader: DataLoader, 
+        phase_epochs: list[int], 
+        log_interval: int = 50
+    ) -> dict[str, float]:
+        """
+        Executes the two-phase training loop.
+        """
+        history = {}
         
-        gen_trainer = cm.trainers.GradientTrainer(
-            model=self.model,
-            loss_fn=bound_loss,
-            lr=1e-4,
-        )
-        gen_trainer.fit(train_loader, target_key="labels", epochs=gen_epochs)
+        # --- PHASE 1: MSE Warmup ---
+        if phase_epochs[0] > 0:
+            logger.info(f"Starting Phase 1: MSE Warmup ({phase_epochs[0]} epochs)")
+            for epoch in range(1, phase_epochs[0] + 1):
+                self.model.adapter.train()
+                epoch_losses = []
+                pbar = tqdm(train_loader, desc=f"Ph1 Ep {epoch}")
+                
+                for batch in pbar:
+                    B = batch["bold"].to(self.device)
+                    
+                    # Extract context and target hidden states
+                    ctx_enc = self.model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+                    tgt_enc = self.model.tokenizer(batch["target"], return_tensors="pt", padding=True, truncation=True)
+                    
+                    ctx_ids, ctx_mask = ctx_enc.input_ids.to(self.device), ctx_enc.attention_mask.to(self.device)
+                    tgt_ids, tgt_mask = tgt_enc.input_ids.to(self.device), tgt_enc.attention_mask.to(self.device)
+                    
+                    with torch.no_grad():
+                        H_query = self.model.get_h_at_layer(ctx_ids, attention_mask=ctx_mask)[:, -1:, :]
+                        
+                        # Masked mean for target signal
+                        H_target_raw = self.model.get_h_at_layer(tgt_ids, attention_mask=tgt_mask)
+                        mask_expanded = tgt_mask.unsqueeze(-1).float()
+                        sum_h = torch.sum(H_target_raw * mask_expanded, dim=1, keepdim=True)
+                        count = torch.sum(mask_expanded, dim=1, keepdim=True).clamp(min=1e-8)
+                        H_target = sum_h / count
+                        
+                        delta_target = H_target - H_query
+                    
+                    # Gradient Step
+                    v_steer = self.model.adapter(B, H_query)
+                    loss = F.mse_loss(v_steer, delta_target)
+                    
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+                    
+                    epoch_losses.append(loss.item())
+                    pbar.set_postfix({"mse": f"{loss.item():.4f}"})
+                
+                avg_loss = np.mean(epoch_losses)
+                logger.info(f"Phase 1 | Ep {epoch} | Avg MSE: {avg_loss:.6f}")
+                history[f"ph1_epoch_{epoch}"] = avg_loss
 
-    def evaluate(self) -> float:
-        if self.tokenizer is None:
-            raise ValueError("Evaluation requires a tokenizer to decode generated text.")
+        # --- PHASE 2: CE Injection ---
+        if len(phase_epochs) > 1 and phase_epochs[1] > 0:
+            logger.info(f"Starting Phase 2: CE Injection ({phase_epochs[1]} epochs)")
+            criterion = nn.CrossEntropyLoss()
+            
+            for epoch in range(1, phase_epochs[1] + 1):
+                self.model.adapter.train()
+                epoch_losses = []
+                pbar = tqdm(train_loader, desc=f"Ph2 Ep {epoch}")
+                
+                for batch in pbar:
+                    B = batch["bold"].to(self.device)
+                    ctx_enc = self.model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+                    input_ids, attention_mask = ctx_enc.input_ids.to(self.device), ctx_enc.attention_mask.to(self.device)
+                    
+                    # Space-prefixed target tokens for next-token alignment
+                    target_tokens = [self.model.tokenizer.encode(" " + t)[0] if len(t) > 0 else self.model.tokenizer.eos_token_id for t in batch["target"]]
+                    target_label = torch.tensor(target_tokens, device=self.device)
+                    
+                    # Forward steered
+                    logits, _ = self.model.forward_steered(input_ids, B, attention_mask=attention_mask)
+                    next_token_logits = logits[:, -1, :]
+                    
+                    loss = criterion(next_token_logits, target_label)
+                    
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+                    
+                    epoch_losses.append(loss.item())
+                    pbar.set_postfix({"ce_loss": f"{loss.item():.4f}"})
+                
+                avg_loss = np.mean(epoch_losses)
+                logger.info(f"Phase 2 | Ep {epoch} | Avg CE: {avg_loss:.6f}")
+                history[f"ph2_epoch_{epoch}"] = avg_loss
 
-        predictions: list[str] = []
-        references: list[str] = []
-        dataloader = self.datamodule.test_dataloader()
+        return history
+
+    def evaluate(
+        self, 
+        test_loader: DataLoader, 
+        samples_to_show: int = 2, 
+        max_new_tokens: int = 5
+    ) -> dict[str, float]:
+        """
+        Multi-baseline benchmark comparison using both token-level accuracy 
+        and sequence-level metrics (BLEU, ROUGE, WER).
+        """
+        self.model.adapter.eval()
         
-        for batch in dataloader:
-            brain_tensor = batch["brain_tensor"]
-            input_ids = batch.get("text_input_ids")
-            attention_mask = batch.get("attention_mask")
-            generated = self.model.generate(
-                brain_tensor=brain_tensor,
-                text_input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=32,
-            )
-            decoded = self.tokenizer.batch_decode(generated, skip_special_tokens=True)
-            predictions.extend(decoded)
-            references.extend(batch["text"])
+        # Accuracy Counters
+        correct_steered = total = 0
+        correct_base = 0
+        correct_random = 0
+        
+        # Sequence Lists
+        all_preds_steered = []
+        all_preds_base = []
+        all_refs = []
+        
+        shown_samples = 0
+        
+        with torch.no_grad():
+            for batch in tqdm(test_loader, desc="Evaluation"):
+                B = batch["bold"].to(self.device)
+                ctx_enc = self.model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+                input_ids, attention_mask = ctx_enc.input_ids.to(self.device), ctx_enc.attention_mask.to(self.device)
+                
+                # Single-token prediction targets
+                target_tokens = [self.model.tokenizer.encode(" " + t)[0] if len(t) > 0 else self.model.tokenizer.eos_token_id for t in batch["target"]]
+                target_label = torch.tensor(target_tokens, device=self.device)
+                
+                # 1. Baseline: GPT-2 (Single Token for Accuracy, Multi-Token for Sequence Metrics)
+                outputs_base = self.model.llm(input_ids, attention_mask=attention_mask)
+                preds_base_single = torch.argmax(outputs_base.logits[:, -1, :], dim=-1)
+                correct_base += (preds_base_single == target_label).sum().item()
+                
+                gen_base = self.model.llm.generate(input_ids, max_new_tokens=max_new_tokens, attention_mask=attention_mask, pad_token_id=self.model.tokenizer.pad_token_id)
+                new_tokens_base = gen_base[:, input_ids.shape[1]:]
+                text_base = self.model.tokenizer.batch_decode(new_tokens_base, skip_special_tokens=True)
+                all_preds_base.extend(text_base)
+                
+                # 2. Intervention: Steered (Single Token for Accuracy, Multi-Token for Sequence Metrics)
+                logits_steered, _ = self.model.forward_steered(input_ids, B, attention_mask=attention_mask)
+                preds_steered_single = torch.argmax(logits_steered[:, -1, :], dim=-1)
+                correct_steered += (preds_steered_single == target_label).sum().item()
+                
+                gen_steered = self.model.generate_steered(input_ids, B, max_new_tokens=max_new_tokens, attention_mask=attention_mask)
+                new_tokens_steered = gen_steered[:, input_ids.shape[1]:]
+                text_steered = self.model.tokenizer.batch_decode(new_tokens_steered, skip_special_tokens=True)
+                all_preds_steered.extend(text_steered)
+                
+                # 3. Reference and Random
+                all_refs.extend(batch["target"])
+                random_preds = torch.randint(0, self.model.tokenizer.vocab_size, (target_label.size(0),), device=self.device)
+                correct_random += (random_preds == target_label).sum().item()
+                
+                total += target_label.size(0)
+                
+                # Qualitative samples
+                while shown_samples < samples_to_show and shown_samples < len(batch["context"]):
+                    logger.info(f"\n--- Sample {shown_samples + 1} ---")
+                    logger.info(f"Context: \"{batch['context'][shown_samples]}\"")
+                    logger.info(f"Target:  \"{batch['target'][shown_samples]}\"")
+                    logger.info(f"Base GPT-2 Decode: \"{text_base[shown_samples].strip()}\"")
+                    logger.info(f"Steered Decode:    \"{text_steered[shown_samples].strip()}\"")
+                    shown_samples += 1
 
-        evaluator = cm.metrics.text.BLEU(ngram=4)
-        return evaluator.compute(predictions, references)
+        # Calculate Full Text Report
+        steered_metrics = calculate_text_report(all_preds_steered, all_refs)
+        base_metrics = calculate_text_report(all_preds_base, all_refs)
 
-    def _build_text_transform(self, tokenizer) -> Callable[[str], dict[str, torch.Tensor]]:
-        def encode(text: str) -> dict[str, torch.Tensor]:
-            encoded = tokenizer(text, return_tensors="pt", truncation=True)
-            input_ids = encoded["input_ids"].squeeze(0)
-            payload = {
-                "text_input_ids": input_ids,
-                "labels": input_ids.clone(),
-            }
-            attention_mask = encoded.get("attention_mask")
-            if attention_mask is not None:
-                payload["attention_mask"] = attention_mask.squeeze(0)
-            return payload
-        return encode
+        results = {
+            "random_acc": 100 * correct_random / total,
+            "base_acc": 100 * correct_base / total,
+            "steered_acc": 100 * correct_steered / total,
+            "steered_bleu1": steered_metrics["bleu1"],
+            "steered_rougeL": steered_metrics["rougeL"],
+            "steered_wer": steered_metrics["wer"],
+        }
+        
+        logger.info("\n" + "="*45)
+        logger.info(f"{'METRIC':<20} | {'BASE GPT-2':<10} | {'STEERED':<10}")
+        logger.info("-" * 45)
+        logger.info(f"{'Top-1 Accuracy':<20} | {results['base_acc']:>9.2f}% | {results['steered_acc']:>9.2f}%")
+        logger.info(f"{'BLEU-1':<20} | {base_metrics['bleu1']:>10.4f} | {results['steered_bleu1']:>10.4f}")
+        logger.info(f"{'ROUGE-L':<20} | {base_metrics['rougeL']:>10.4f} | {results['steered_rougeL']:>10.4f}")
+        logger.info(f"{'WER (Lower Better)':<20} | {base_metrics['wer']:>10.4f} | {results['steered_wer']:>10.4f}")
+        logger.info("=" * 45)
+        
+        return results
+
+    def predict(self, input_ids: torch.Tensor, brain_batch: torch.Tensor, **kwargs):
+        """Standard steering inference."""
+        self.model.adapter.eval()
+        with torch.no_grad():
+            logits, _ = self.model.forward_steered(input_ids, brain_batch, **kwargs)
+        return logits
