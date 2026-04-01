@@ -37,6 +37,8 @@ class ResidualSteerPipeline(BasePipeline):
         self, 
         train_loader: DataLoader, 
         phase_epochs: list[int], 
+        eval_loader: DataLoader | None = None,
+        eval_interval: int = 1,
         log_interval: int = 50
     ) -> dict[str, float]:
         """
@@ -93,7 +95,45 @@ class ResidualSteerPipeline(BasePipeline):
                     pbar.set_postfix({"mse": f"{loss.item():.4f}"})
                 
                 avg_loss = np.mean(epoch_losses)
-                logger.info(f"Phase 1 | Ep {epoch} | Avg MSE: {avg_loss:.6f}")
+                log_str = f"Phase 1 | Ep {epoch} | Avg MSE: {avg_loss:.6f}"
+                
+                # --- Phase 1 Validation ---
+                if eval_loader and epoch % eval_interval == 0:
+                    self.model.adapters.eval()
+                    val_losses = []
+                    with torch.no_grad():
+                        for batch in eval_loader:
+                            B = batch["bold"].to(self.device)
+                            ctx_enc = self.model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+                            tgt_enc = self.model.tokenizer(batch["target"], return_tensors="pt", padding=True, truncation=True)
+                            
+                            ctx_ids, ctx_mask = ctx_enc.input_ids.to(self.device), ctx_enc.attention_mask.to(self.device)
+                            tgt_ids, tgt_mask = tgt_enc.input_ids.to(self.device), tgt_enc.attention_mask.to(self.device)
+                            
+                            ctx_out = self.model.llm(ctx_ids, attention_mask=ctx_mask, output_hidden_states=True)
+                            tgt_out = self.model.llm(tgt_ids, attention_mask=tgt_mask, output_hidden_states=True)
+                            
+                            batch_mse = 0
+                            for layer in self.model.injection_layers:
+                                H_query = ctx_out.hidden_states[layer][:, -1:, :]
+                                
+                                H_target_raw = tgt_out.hidden_states[layer]
+                                mask_expanded = tgt_mask.unsqueeze(-1).float()
+                                sum_h = torch.sum(H_target_raw * mask_expanded, dim=1, keepdim=True)
+                                count = torch.sum(mask_expanded, dim=1, keepdim=True).clamp(min=1e-8)
+                                H_target = sum_h / count
+                                
+                                delta_target = H_target - H_query
+                                v_steer = self.model.adapters[str(layer)](B, H_query)
+                                batch_mse += F.mse_loss(v_steer, delta_target)
+                            
+                            val_losses.append((batch_mse / len(self.model.injection_layers)).item())
+                    
+                    val_avg = np.mean(val_losses)
+                    log_str += f" | Val MSE: {val_avg:.6f}"
+                    history[f"ph1_epoch_{epoch}_val"] = val_avg
+                
+                logger.info(log_str)
                 history[f"ph1_epoch_{epoch}"] = avg_loss
 
         # --- PHASE 2: CE Injection ---
@@ -129,7 +169,31 @@ class ResidualSteerPipeline(BasePipeline):
                     pbar.set_postfix({"ce_loss": f"{loss.item():.4f}"})
                 
                 avg_loss = np.mean(epoch_losses)
-                logger.info(f"Phase 2 | Ep {epoch} | Avg CE: {avg_loss:.6f}")
+                log_str = f"Phase 2 | Ep {epoch} | Avg CE: {avg_loss:.6f}"
+                
+                # --- Phase 2 Validation ---
+                if eval_loader and epoch % eval_interval == 0:
+                    self.model.adapters.eval()
+                    criterion = nn.CrossEntropyLoss()
+                    val_losses = []
+                    with torch.no_grad():
+                        for batch in eval_loader:
+                            B = batch["bold"].to(self.device)
+                            ctx_enc = self.model.tokenizer(batch["context"], return_tensors="pt", padding=True, truncation=True)
+                            input_ids, attention_mask = ctx_enc.input_ids.to(self.device), ctx_enc.attention_mask.to(self.device)
+                            
+                            target_tokens = [self.model.tokenizer.encode(" " + t)[0] if len(t) > 0 else self.model.tokenizer.eos_token_id for t in batch["target"]]
+                            target_label = torch.tensor(target_tokens, device=self.device)
+                            
+                            logits, _ = self.model.forward_steered(input_ids, B, attention_mask=attention_mask)
+                            next_token_logits = logits[:, -1, :]
+                            val_losses.append(criterion(next_token_logits, target_label).item())
+                    
+                    val_avg = np.mean(val_losses)
+                    log_str += f" | Val CE: {val_avg:.6f}"
+                    history[f"ph2_epoch_{epoch}_val"] = val_avg
+                
+                logger.info(log_str)
                 history[f"ph2_epoch_{epoch}"] = avg_loss
 
         return history

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description="Convergent Minds: Phase-based Brain Steering")
     parser.add_argument("--epochs", type=str, default="5,10", help="Comma-separated epochs for Ph1 and Ph2")
+    parser.add_argument("--eval-interval", type=int, default=1, help="Epoch interval for validation logging")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for the adapter")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--subject", type=str, default="S1", help="Subject ID (e.g., S1, S2)")
@@ -51,7 +52,12 @@ def main():
     
     # Training
     if any(e > 0 for e in phase_epochs):
-        pipeline.train(train_loader, phase_epochs=phase_epochs)
+        pipeline.train(
+            train_loader, 
+            phase_epochs=phase_epochs, 
+            eval_loader=test_loader, 
+            eval_interval=args.eval_interval
+        )
     
     # Evaluation
     logger.info("Starting Multi-Baseline Evaluation...")
