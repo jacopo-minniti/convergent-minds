@@ -98,19 +98,14 @@ class ResidualSteerLM(BrainLanguageModel):
             
         transformer = self.llm.transformer
         
-        # Get head mask if it exists
-        head_mask = transformer.get_head_mask(None, len(transformer.h))
-        
         # Get causality mask (GPT-2 specific)
         for i in range(self.injection_layer, len(transformer.h)):
             # Calling the block with the hidden_states.
-            # We don't pass the attention mask here manually to avoid complex mask transformations,
-            # trusting that if hidden_states is 3D, GPT-2 attention will work.
             layer_outputs = transformer.h[i](
                 hidden_states,
                 layer_past=None,
                 attention_mask=None,
-                head_mask=head_mask[i],
+                head_mask=None,
                 use_cache=False,
             )
             hidden_states = layer_outputs[0]
