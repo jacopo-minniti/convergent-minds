@@ -22,6 +22,8 @@ class ResidualSteerLM(BrainLanguageModel):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.llm = AutoModelForCausalLM.from_pretrained(llm_id)
         self.tokenizer = AutoTokenizer.from_pretrained(llm_id)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         
         self.llm_dim = self.llm.config.hidden_size
         self.injection_layer = injection_layer
