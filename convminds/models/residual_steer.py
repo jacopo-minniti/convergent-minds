@@ -13,28 +13,37 @@ class BrainSteerAdapter(nn.Module):
     Adapter that maps brain activity (4 TRs) to a steering vector 
     via cross-attention with the LLM's current hidden state.
     """
-    def __init__(self, brain_dim=1000, llm_dim=768, num_heads=12, n_frames=4):
+    def __init__(self, brain_dim=1000, llm_dim=768, num_heads=12, n_frames=4, dropout: float = 0.1):
         super().__init__()
         self.brain_dim = brain_dim
         self.llm_dim = llm_dim
         self.n_frames = n_frames
         
         self.pos_embed = nn.Parameter(torch.randn(1, n_frames, brain_dim) * 0.02)
+        self.pos_dropout = nn.Dropout(dropout)
         
         self.W_K = nn.Linear(brain_dim, llm_dim)
         self.W_V = nn.Linear(brain_dim, llm_dim)
         self.W_Q = nn.Linear(llm_dim, llm_dim)
         
-        self.attn = nn.MultiheadAttention(embed_dim=llm_dim, num_heads=num_heads, batch_first=True)
+        # Built-in attention dropout
+        self.attn = nn.MultiheadAttention(
+            embed_dim=llm_dim, 
+            num_heads=num_heads, 
+            dropout=dropout,
+            batch_first=True
+        )
         
         self.mlp = nn.Sequential(
             nn.Linear(llm_dim, llm_dim * 4),
             nn.GELU(),
-            nn.Linear(llm_dim * 4, llm_dim)
+            nn.Dropout(dropout),
+            nn.Linear(llm_dim * 4, llm_dim),
+            nn.Dropout(dropout)
         )
 
     def forward(self, B, H_query):
-        B = B + self.pos_embed
+        B = self.pos_dropout(B + self.pos_embed)
         K = self.W_K(B)
         V = self.W_V(B)
         Q = self.W_Q(H_query)
@@ -44,9 +53,16 @@ class BrainSteerAdapter(nn.Module):
 
 class ResidualSteerLM(BrainLanguageModel):
     """
-    Residual Steering LM with support for multi-layer injection.
+    Residual Steering LM with multi-layer injection and dropout.
     """
-    def __init__(self, llm_id: str = "gpt2", brain_dim: int = 1000, injection_layers: list[int] = [6], n_frames: int = 4):
+    def __init__(
+        self, 
+        llm_id: str = "gpt2", 
+        brain_dim: int = 1000, 
+        injection_layers: list[int] = [6], 
+        n_frames: int = 4,
+        dropout: float = 0.1
+    ):
         super().__init__()
         
         self.llm = AutoModelForCausalLM.from_pretrained(llm_id)
@@ -59,16 +75,19 @@ class ResidualSteerLM(BrainLanguageModel):
         self.llm_dim = self.llm.config.hidden_size
         self.injection_layers = sorted(injection_layers)
         
-        # One adapter per target layer
         self.adapters = nn.ModuleDict({
-            str(layer): BrainSteerAdapter(brain_dim=brain_dim, llm_dim=self.llm_dim, n_frames=n_frames)
+            str(layer): BrainSteerAdapter(
+                brain_dim=brain_dim, 
+                llm_dim=self.llm_dim, 
+                n_frames=n_frames,
+                dropout=dropout
+            )
             for layer in self.injection_layers
         })
         
         self.freeze_base_model()
 
     def get_h_at_layer(self, input_ids: torch.Tensor, layer_idx: int, **kwargs) -> torch.Tensor:
-        """Extract hidden states at a specific layer."""
         with torch.no_grad():
             outputs = self.llm(input_ids=input_ids, output_hidden_states=True, **kwargs)
             return outputs.hidden_states[layer_idx]
@@ -77,9 +96,6 @@ class ResidualSteerLM(BrainLanguageModel):
         return self.forward_steered(input_ids, brain_batch, **kwargs)
 
     def forward_steered(self, input_ids: torch.Tensor, brain_batch: torch.Tensor, **kwargs):
-        """
-        Execute forward pass with multi-layer residual injection using hooks.
-        """
         v_steer_cache = {}
 
         def get_steering_hook(layer_str):
@@ -119,10 +135,7 @@ class ResidualSteerLM(BrainLanguageModel):
         max_new_tokens: int = 15,
         **kwargs
     ) -> torch.Tensor:
-        """Multi-layer persistent steering."""
         with torch.no_grad():
-            # Standard forward call once to capture initial steering vectors
-            # using output_hidden_states=True to avoid hook-recursion if possible
             outputs = self.llm(input_ids=input_ids, output_hidden_states=True, **kwargs)
             
             v_steers = {}

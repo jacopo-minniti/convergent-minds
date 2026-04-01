@@ -27,11 +27,12 @@ class ResidualSteerPipeline(BasePipeline):
         self,
         model: ResidualSteerLM,
         lr: float = 1e-4,
+        weight_decay: float = 0.01,
         device: torch.device | None = None,
     ):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
-        self.optimizer = AdamW(self.model.adapters.parameters(), lr=lr)
+        self.optimizer = AdamW(self.model.adapters.parameters(), lr=lr, weight_decay=weight_decay)
 
     def train(
         self, 

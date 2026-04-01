@@ -23,6 +23,8 @@ def main():
     parser.add_argument("--epochs", type=str, default="5,10", help="Comma-separated epochs for Ph1 and Ph2")
     parser.add_argument("--eval-interval", type=int, default=1, help="Epoch interval for validation logging")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for the adapter")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate for the adapter")
+    parser.add_argument("--weight-decay", type=float, default=0.01, help="L2 regularization (weight decay) for AdamW")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--subject", type=str, default="S1", help="Subject ID (e.g., S1, S2)")
     parser.add_argument("--llm", type=str, default="gpt2", help="Base LLM ID from HuggingFace")
@@ -44,11 +46,11 @@ def main():
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
     
     # 2. Model Initialization
-    logger.info(f"Initializing ResidualSteerLM ({args.llm}) with layers {injection_layers}...")
-    model = ResidualSteerLM(llm_id=args.llm, injection_layers=injection_layers)
+    logger.info(f"Initializing ResidualSteerLM ({args.llm}) with layers {injection_layers} (dropout: {args.dropout})...")
+    model = ResidualSteerLM(llm_id=args.llm, injection_layers=injection_layers, dropout=args.dropout)
     
     # 3. Pipeline Execution
-    pipeline = ResidualSteerPipeline(model=model, lr=args.lr, device=device)
+    pipeline = ResidualSteerPipeline(model=model, lr=args.lr, weight_decay=args.weight_decay, device=device)
     
     # Training
     if any(e > 0 for e in phase_epochs):
